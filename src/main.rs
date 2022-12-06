@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use std::borrow::Cow;
+use std::{borrow::Cow, ops::Deref};
 
 use bevy::{
     prelude::*,
@@ -22,6 +22,7 @@ const SIZE: (u32, u32) = (1280, 720);
 const WORKGROUP_SIZE: u32 = 8;
 
 use bevy::log::LogPlugin;
+use wgpu::Maintain;
 
 fn main() {
     let mut app = App::new();
@@ -101,6 +102,118 @@ struct GameOfLifeImage(Handle<Image>);
 #[derive(Resource)]
 struct GameOfLifeImageBindGroup(BindGroup);
 
+pub fn read_buffer(buffer: &Buffer, len: usize, device: &RenderDevice, queue: &RenderQueue) {
+    let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
+
+    let scratch = StorageBufferWrapper::new(vec![0, 0, 0, 0, 0, 0, 0, 0]);
+    let dest = device.create_buffer_with_data(&BufferInitDescriptor {
+        label: None,
+        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+        contents: scratch.as_ref(),
+    });
+    encoder.copy_buffer_to_buffer(buffer, 0, &dest, 0, 8);
+    queue.submit([encoder.finish()]);
+    let slice = dest.slice(..);
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let err = result.err();
+        if err.is_some() {
+            panic!("{}", err.unwrap().to_string());
+        }
+    });
+    device.poll(Maintain::Wait);
+    let data = slice.get_mapped_range();
+    let result = Vec::from(data.deref());
+    println!("{:?}", result);
+}
+use encase::{
+    internal::WriteInto, DynamicStorageBuffer as DynamicStorageBufferWrapper, ShaderType,
+    StorageBuffer as StorageBufferWrapper,
+};
+
+pub struct MyStorageBuffer<T: ShaderType> {
+    value: T,
+    scratch: StorageBufferWrapper<Vec<u8>>,
+    buffer: Option<Buffer>,
+    capacity: usize,
+    label: Option<String>,
+    label_changed: bool,
+}
+
+impl<T: ShaderType + WriteInto> MyStorageBuffer<T> {
+    #[inline]
+    pub fn buffer(&self) -> Option<&Buffer> {
+        self.buffer.as_ref()
+    }
+
+    #[inline]
+    pub fn binding(&self) -> Option<BindingResource> {
+        Some(BindingResource::Buffer(
+            self.buffer()?.as_entire_buffer_binding(),
+        ))
+    }
+
+    pub fn set(&mut self, value: T) {
+        self.value = value;
+    }
+
+    pub fn get(&self) -> &T {
+        &self.value
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+
+    pub fn set_label(&mut self, label: Option<&str>) {
+        let label = label.map(str::to_string);
+
+        if label != self.label {
+            self.label_changed = true;
+        }
+
+        self.label = label;
+    }
+
+    pub fn get_label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
+    /// Queues writing of data from system RAM to VRAM using the [`RenderDevice`](crate::renderer::RenderDevice)
+    /// and the provided [`RenderQueue`](crate::renderer::RenderQueue).
+    ///
+    /// If there is no GPU-side buffer allocated to hold the data currently stored, or if a GPU-side buffer previously
+    /// allocated does not have enough capacity, a new GPU-side buffer is created.
+    pub fn write_buffer(&mut self, device: &RenderDevice, queue: &RenderQueue) {
+        self.scratch.write(&self.value).unwrap();
+
+        let size = self.scratch.as_ref().len();
+
+        if self.capacity < size || self.label_changed {
+            self.buffer = Some(device.create_buffer_with_data(&BufferInitDescriptor {
+                label: self.label.as_deref(),
+                usage: BufferUsages::COPY_DST | BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+                contents: self.scratch.as_ref(),
+            }));
+            self.capacity = size;
+            self.label_changed = false;
+        } else if let Some(buffer) = &self.buffer {
+            queue.write_buffer(buffer, 0, self.scratch.as_ref());
+        }
+    }
+}
+impl<T: ShaderType + Default> Default for MyStorageBuffer<T> {
+    fn default() -> Self {
+        Self {
+            value: T::default(),
+            scratch: StorageBufferWrapper::new(Vec::new()),
+            buffer: None,
+            capacity: 0,
+            label: None,
+            label_changed: false,
+        }
+    }
+}
+
 fn queue_bind_group(
     mut commands: Commands,
     pipeline: Res<GameOfLifePipeline>,
@@ -111,14 +224,27 @@ fn queue_bind_group(
 ) {
     let view = &gpu_images[&game_of_life_image.0];
     let test = pipeline.storage.get();
-    println!("{:?}", test);
+    read_buffer(
+        pipeline.storage.buffer().unwrap(),
+        0,
+        &render_device,
+        &render_queue,
+    );
+
+    //println!("{:?}", test);
     let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
         label: None,
         layout: &pipeline.texture_bind_group_layout,
-        entries: &[BindGroupEntry {
-            binding: 0,
-            resource: pipeline.storage.binding().unwrap(),
-        }],
+        entries: &[
+            BindGroupEntry {
+                binding: 0,
+                resource: pipeline.storage.binding().unwrap(),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::TextureView(&view.texture_view),
+            },
+        ],
     });
     commands.insert_resource(GameOfLifeImageBindGroup(bind_group));
 }
@@ -128,7 +254,7 @@ pub struct GameOfLifePipeline {
     texture_bind_group_layout: BindGroupLayout,
     init_pipeline: CachedComputePipelineId,
     update_pipeline: CachedComputePipelineId,
-    storage: StorageBuffer<IVec2>,
+    storage: MyStorageBuffer<IVec2>,
 }
 
 impl FromWorld for GameOfLifePipeline {
@@ -138,16 +264,28 @@ impl FromWorld for GameOfLifePipeline {
                 .resource::<RenderDevice>()
                 .create_bind_group_layout(&BindGroupLayoutDescriptor {
                     label: None,
-                    entries: &[BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
+                    entries: &[
+                        BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: ShaderStages::COMPUTE,
+                            ty: BindingType::Buffer {
+                                ty: BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
                         },
-                        count: None,
-                    }],
+                        BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: ShaderStages::COMPUTE,
+                            ty: BindingType::StorageTexture {
+                                access: StorageTextureAccess::ReadWrite,
+                                format: TextureFormat::Rgba8Unorm,
+                                view_dimension: TextureViewDimension::D2,
+                            },
+                            count: None,
+                        },
+                    ],
                 });
         let shader = world.resource::<AssetServer>().load("game_of_life.wgsl");
         let mut pipeline_cache = world.resource_mut::<PipelineCache>();
@@ -166,7 +304,8 @@ impl FromWorld for GameOfLifePipeline {
             entry_point: Cow::from("update"),
         });
 
-        let mut storage = StorageBuffer::default();
+        let mut storage = MyStorageBuffer::default();
+        *storage.get_mut() = IVec2::new(7, 9);
         storage.write_buffer(
             world.resource::<RenderDevice>(),
             world.resource::<RenderQueue>(),

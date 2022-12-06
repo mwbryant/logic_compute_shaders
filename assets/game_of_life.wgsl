@@ -4,6 +4,8 @@ struct Particles {
 
 @group(0) @binding(0)
 var<storage, read_write> particles: Particles;
+@group(0) @binding(1)
+var texture: texture_storage_2d<rgba8unorm, read_write>;
 
 fn hash(value: u32) -> u32 {
     var state = value;
@@ -29,7 +31,7 @@ fn init(@builtin(global_invocation_id) invocation_id: vec3<u32>, @builtin(num_wo
     //let color = vec4<f32>(f32(alive));
 
     particles = Particles(
-         vec2<i32>(10, 15)
+         vec2<i32>(0, 15)
     );
 }
 
@@ -69,6 +71,13 @@ fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     //storageBarrier();
 
     particles = Particles(
-         vec2<i32>(10, 15)
+         vec2<i32>(particles.position.x + 1 , particles.position.y)
     );
+    if particles.position.x > 255 {
+    particles = Particles(
+         vec2<i32>(1 , particles.position.y)
+    );
+    }
+    let color = vec4<f32>(f32(particles.position.x)/ 255.0, f32(particles.position.y)/ 255.0, 0.0, 1.0);
+    textureStore(texture, location, color);
 }
