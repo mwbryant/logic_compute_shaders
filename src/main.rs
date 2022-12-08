@@ -14,6 +14,7 @@ use bevy::{
         renderer::{RenderContext, RenderDevice, RenderQueue},
         RenderApp, RenderStage,
     },
+    utils::HashMap,
 };
 use bevy_inspector_egui::WorldInspectorPlugin;
 
@@ -21,6 +22,11 @@ pub const HEIGHT: f32 = 480.0;
 pub const WIDTH: f32 = 640.0;
 
 const PARTICLE_COUNT: u32 = 1024 * 1000;
+#[derive(ShaderType, Default, Clone, Copy)]
+struct Particle {
+    position: Vec2,
+}
+
 // XXX when changing this also change it in the shader... TODO figure out how to avoid that...
 const WORKGROUP_SIZE: u32 = 16;
 
@@ -54,8 +60,6 @@ pub struct ParticleSystem {
     image: Handle<Image>,
     update_bind_group: Option<ParticleUpdateBindGroup>,
     render_bind_group: Option<ParticleRenderBindGroup>,
-    render_state: ParticleRenderState,
-    update_state: ParticleUpdateState,
 }
 
 impl ExtractComponent for ParticleSystem {
@@ -165,7 +169,7 @@ pub fn read_buffer(buffer: &Buffer, device: &RenderDevice, queue: &RenderQueue) 
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
 
     //FIXME this could come from buffer.size
-    let scratch = [0; PARTICLE_COUNT as usize];
+    let scratch = [0; (Particle::SHADER_SIZE.get() * PARTICLE_COUNT as u64) as usize];
     let dest = device.create_buffer_with_data(&BufferInitDescriptor {
         label: None,
         usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
@@ -239,6 +243,9 @@ pub struct ParticleUpdatePipeline {
     storage: Buffer,
 }
 
+#[derive(Resource)]
+pub struct ParticleSystemStateTracker {}
+
 impl FromWorld for ParticleUpdatePipeline {
     fn from_world(world: &mut World) -> Self {
         let texture_bind_group_layout =
@@ -274,13 +281,18 @@ impl FromWorld for ParticleUpdatePipeline {
             entry_point: Cow::from("update"),
         });
 
+        let particle = [Particle::default(); PARTICLE_COUNT as usize];
+        //ugh
+        let mut byte_buffer = Vec::new();
+        let mut buffer = encase::StorageBuffer::new(&mut byte_buffer);
+        buffer.write(&particle).unwrap();
         let storage =
             world
                 .resource::<RenderDevice>()
                 .create_buffer_with_data(&BufferInitDescriptor {
                     label: None,
                     usage: BufferUsages::COPY_DST | BufferUsages::STORAGE | BufferUsages::COPY_SRC,
-                    contents: &[0; PARTICLE_COUNT as usize],
+                    contents: buffer.into_inner(),
                 });
         ParticleUpdatePipeline {
             bind_group_layout: texture_bind_group_layout,
@@ -300,13 +312,16 @@ enum ParticleUpdateState {
 }
 
 struct UpdateParticlesNode {
-    particle_systems: QueryState<&'static ParticleSystem>,
+    particle_systems: QueryState<(Entity, &'static ParticleSystem)>,
+    //FIXME flush this when the entities no long exists, grows without bound if constantly creating and destroying spawners
+    update_state: HashMap<Entity, ParticleUpdateState>,
 }
 
 impl UpdateParticlesNode {
     fn new(world: &mut World) -> Self {
         Self {
             particle_systems: QueryState::new(world),
+            update_state: HashMap::default(),
         }
     }
 }
@@ -317,34 +332,36 @@ impl render_graph::Node for UpdateParticlesNode {
         let pipeline = world.resource::<ParticleUpdatePipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        //Track which ones change for ownership of world reasons
-        let mut updated_entities = Vec::default();
-
         for (entity, system) in systems.iter(world) {
             // if the corresponding pipeline has loaded, transition to the next stage
-            match system.update_state {
+            let update_state = match self.update_state.get(&entity) {
+                Some(state) => state,
+                None => {
+                    self.update_state
+                        .insert(entity, ParticleUpdateState::Loading);
+                    &ParticleUpdateState::Loading
+                }
+            };
+            match update_state {
                 ParticleUpdateState::Loading => {
                     if let CachedPipelineState::Ok(_) =
                         pipeline_cache.get_compute_pipeline_state(pipeline.init_pipeline)
                     {
-                        updated_entities.push((entity, ParticleUpdateState::Init));
+                        self.update_state.insert(entity, ParticleUpdateState::Init);
                     }
                 }
                 ParticleUpdateState::Init => {
                     if let CachedPipelineState::Ok(_) =
                         pipeline_cache.get_compute_pipeline_state(pipeline.update_pipeline)
                     {
-                        updated_entities.push((entity, ParticleUpdateState::Update));
+                        self.update_state
+                            .insert(entity, ParticleUpdateState::Update);
                     }
                 }
                 ParticleUpdateState::Update => {}
             }
         }
-        //Must do the updating after for ownership reasons I can't easily riddle out
-        let mut systems = world.query::<&mut ParticleSystem>();
-        for (entity, new_state) in updated_entities {
-            systems.get_mut(world, entity).unwrap().update_state = new_state;
-        }
+        //Update the query for the run step
         self.particle_systems.update_archetypes(world);
     }
 
@@ -358,7 +375,7 @@ impl render_graph::Node for UpdateParticlesNode {
         let pipeline = world.resource::<ParticleUpdatePipeline>();
 
         //Am I using iter manual correctly?
-        for system in self.particle_systems.iter_manual(world) {
+        for (entity, system) in self.particle_systems.iter_manual(world) {
             let mut pass = render_context
                 .command_encoder
                 .begin_compute_pass(&ComputePassDescriptor::default());
@@ -366,7 +383,7 @@ impl render_graph::Node for UpdateParticlesNode {
             pass.set_bind_group(0, &system.update_bind_group.as_ref().unwrap().0, &[]);
 
             // select the pipeline based on the current state
-            match system.update_state {
+            match self.update_state[&entity] {
                 ParticleUpdateState::Loading => {}
                 ParticleUpdateState::Init => {
                     let init_pipeline = pipeline_cache
@@ -450,13 +467,15 @@ enum ParticleRenderState {
 }
 
 struct RenderParticlesNode {
-    particle_systems: QueryState<&'static ParticleSystem>,
+    particle_systems: QueryState<(Entity, &'static ParticleSystem)>,
+    render_state: HashMap<Entity, ParticleRenderState>,
 }
 
 impl RenderParticlesNode {
     fn new(world: &mut World) -> Self {
         Self {
             particle_systems: QueryState::new(world),
+            render_state: HashMap::default(),
         }
     }
 }
@@ -467,28 +486,29 @@ impl render_graph::Node for RenderParticlesNode {
         let pipeline = world.resource::<ParticleRenderPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        //Track which ones change for ownership of world reasons
-        let mut updated_entities = Vec::default();
-
         for (entity, system) in systems.iter(world) {
             // if the corresponding pipeline has loaded, transition to the next stage
-            match system.render_state {
+            let render_state = match self.render_state.get(&entity) {
+                Some(state) => state,
+                None => {
+                    self.render_state
+                        .insert(entity, ParticleRenderState::Loading);
+                    &ParticleRenderState::Loading
+                }
+            };
+            // if the corresponding pipeline has loaded, transition to the next stage
+            match render_state {
                 // if the corresponding pipeline has loaded, transition to the next stage
                 ParticleRenderState::Loading => {
                     if let CachedPipelineState::Ok(_) =
                         pipeline_cache.get_compute_pipeline_state(pipeline.render_pipeline)
                     {
-                        updated_entities.push((entity, ParticleRenderState::Render));
+                        self.render_state
+                            .insert(entity, ParticleRenderState::Render);
                     }
                 }
                 ParticleRenderState::Render => {}
             }
-        }
-        //Must do the updating after for ownership reasons I can't easily riddle out
-        let mut systems = world.query::<&mut ParticleSystem>();
-        for (entity, new_state) in updated_entities {
-            info!("{:?}", new_state);
-            systems.get_mut(world, entity).unwrap().render_state = new_state;
         }
         self.particle_systems.update_archetypes(world);
     }
@@ -502,7 +522,7 @@ impl render_graph::Node for RenderParticlesNode {
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<ParticleRenderPipeline>();
 
-        for system in self.particle_systems.iter_manual(world) {
+        for (entity, system) in self.particle_systems.iter_manual(world) {
             let mut pass = render_context
                 .command_encoder
                 .begin_compute_pass(&ComputePassDescriptor::default());
@@ -510,7 +530,7 @@ impl render_graph::Node for RenderParticlesNode {
             pass.set_bind_group(0, &system.render_bind_group.as_ref().unwrap().0, &[]);
 
             // select the pipeline based on the current state
-            match system.render_state {
+            match self.render_state[&entity] {
                 ParticleRenderState::Loading => {}
                 ParticleRenderState::Render => {
                     let render_pipeline = pipeline_cache

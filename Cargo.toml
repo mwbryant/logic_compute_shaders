@@ -14,3 +14,4 @@ bevy = {version = "0.9", features = ["dynamic", "wav"] }
 bevy-inspector-egui = "0.14.0"
 bevy_mod_debugdump = "0.6"
 wgpu = "0.14"
+bytemuck = "1.12"
