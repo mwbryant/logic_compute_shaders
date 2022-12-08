@@ -20,7 +20,7 @@ use bevy_inspector_egui::WorldInspectorPlugin;
 pub const HEIGHT: f32 = 480.0;
 pub const WIDTH: f32 = 640.0;
 
-const PARTICLE_COUNT: u32 = 30;
+const PARTICLE_COUNT: u32 = 1000;
 #[derive(ShaderType, Default, Clone, Copy)]
 struct Particle {
     position: Vec2,
@@ -39,6 +39,7 @@ fn main() {
                 width: WIDTH,
                 height: HEIGHT,
                 title: "Logic Particles".to_string(),
+                present_mode: bevy::window::PresentMode::Immediate,
                 resizable: false,
                 ..default()
             },
@@ -48,7 +49,7 @@ fn main() {
     .add_plugin(WorldInspectorPlugin::new())
     .add_plugin(ParticlePlugin)
     .add_startup_system(setup)
-    .add_system(clear_texture)
+    //.add_system(clear_texture)
     .add_system(spawn);
     //bevy_mod_debugdump::print_render_graph(&mut app);
     app.run();
@@ -97,7 +98,7 @@ fn clear_texture(
     }
 }
 fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>, keyboard: Res<Input<KeyCode>>) {
-    if keyboard.just_pressed(KeyCode::Space) {
+    if keyboard.pressed(KeyCode::Space) {
         let mut image = Image::new_fill(
             Extent3d {
                 width: WIDTH as u32,
@@ -105,7 +106,7 @@ fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>, keyboard: Re
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
-            &[0, 0, 0, 255],
+            &[0, 0, 0, 0],
             TextureFormat::Rgba8Unorm,
         );
         image.texture_descriptor.usage = TextureUsages::COPY_DST
@@ -138,7 +139,7 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        &[0, 0, 0, 255],
+        &[0, 0, 0, 0],
         TextureFormat::Rgba8Unorm,
     );
     image.texture_descriptor.usage =
@@ -151,10 +152,14 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 custom_size: Some(Vec2::new(WIDTH * 3.0, HEIGHT * 3.0)),
                 ..default()
             },
-            texture: image,
+            texture: image.clone(),
             ..default()
         })
-        .insert(ParticleSystem::default());
+        .insert(ParticleSystem {
+            image,
+            update_bind_group: None,
+            render_bind_group: None,
+        });
     commands.spawn(Camera2dBundle::default());
 }
 
@@ -440,6 +445,7 @@ impl render_graph::Node for UpdateParticlesNode {
 #[derive(Resource, Clone)]
 pub struct ParticleRenderPipeline {
     render_group_layout: BindGroupLayout,
+    clear_pipeline: CachedComputePipelineId,
     render_pipeline: CachedComputePipelineId,
 }
 
@@ -478,13 +484,22 @@ impl FromWorld for ParticleRenderPipeline {
         let render_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: None,
             layout: Some(vec![texture_bind_group_layout.clone()]),
-            shader,
+            shader: shader.clone(),
             shader_defs: vec![],
             entry_point: Cow::from("render"),
         });
 
+        let clear_pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: None,
+            layout: Some(vec![texture_bind_group_layout.clone()]),
+            shader,
+            shader_defs: vec![],
+            entry_point: Cow::from("clear"),
+        });
+
         ParticleRenderPipeline {
             render_group_layout: texture_bind_group_layout,
+            clear_pipeline,
             render_pipeline,
         }
     }
@@ -564,6 +579,16 @@ impl render_graph::Node for RenderParticlesNode {
             match self.render_state[&entity] {
                 ParticleRenderState::Loading => {}
                 ParticleRenderState::Render => {
+                    let clear_pipeline = pipeline_cache
+                        .get_compute_pipeline(pipeline.clear_pipeline)
+                        .unwrap();
+                    pass.set_pipeline(clear_pipeline);
+                    pass.dispatch_workgroups(
+                        WIDTH as u32 / WORKGROUP_SIZE,
+                        HEIGHT as u32 / WORKGROUP_SIZE,
+                        1,
+                    );
+
                     let render_pipeline = pipeline_cache
                         .get_compute_pipeline(pipeline.render_pipeline)
                         .unwrap();
