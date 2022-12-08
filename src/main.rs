@@ -20,7 +20,7 @@ use bevy_inspector_egui::WorldInspectorPlugin;
 pub const HEIGHT: f32 = 480.0;
 pub const WIDTH: f32 = 640.0;
 
-const PARTICLE_COUNT: u32 = 1024 * 1000;
+const PARTICLE_COUNT: u32 = 30;
 #[derive(ShaderType, Default, Clone, Copy)]
 struct Particle {
     position: Vec2,
@@ -48,7 +48,8 @@ fn main() {
     .add_plugin(WorldInspectorPlugin::new())
     .add_plugin(ParticlePlugin)
     .add_startup_system(setup)
-    .add_system(clear_texture);
+    .add_system(clear_texture)
+    .add_system(spawn);
     //bevy_mod_debugdump::print_render_graph(&mut app);
     app.run();
 }
@@ -75,25 +76,58 @@ fn clear_texture(
     mut images: ResMut<Assets<Image>>,
     mut sprite: Query<(&mut Handle<Image>, &mut ParticleSystem)>,
 ) {
-    let mut image = Image::new_fill(
-        Extent3d {
-            width: WIDTH as u32,
-            height: HEIGHT as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        &[0, 0, 0, 0],
-        TextureFormat::Rgba8Unorm,
-    );
-    image.texture_descriptor.usage =
-        TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
-    let image = images.add(image);
+    for (mut sprite, mut system) in &mut sprite {
+        let mut image = Image::new_fill(
+            Extent3d {
+                width: WIDTH as u32,
+                height: HEIGHT as u32,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &[0, 0, 0, 0],
+            TextureFormat::Rgba8Unorm,
+        );
+        image.texture_descriptor.usage = TextureUsages::COPY_DST
+            | TextureUsages::STORAGE_BINDING
+            | TextureUsages::TEXTURE_BINDING;
+        let image = images.add(image);
 
-    let (mut sprite, mut system) = sprite.single_mut();
-    *sprite = image.clone();
-    // wish i wasn't double booking this
-    system.image = image;
-    //commands.insert_resource(ParticleImage(image));
+        *sprite = image.clone();
+        system.image = image;
+    }
+}
+fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>, keyboard: Res<Input<KeyCode>>) {
+    if keyboard.just_pressed(KeyCode::Space) {
+        let mut image = Image::new_fill(
+            Extent3d {
+                width: WIDTH as u32,
+                height: HEIGHT as u32,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &[0, 0, 0, 255],
+            TextureFormat::Rgba8Unorm,
+        );
+        image.texture_descriptor.usage = TextureUsages::COPY_DST
+            | TextureUsages::STORAGE_BINDING
+            | TextureUsages::TEXTURE_BINDING;
+        let image = images.add(image);
+
+        commands
+            .spawn(SpriteBundle {
+                sprite: Sprite {
+                    custom_size: Some(Vec2::new(WIDTH * 3.0, HEIGHT * 3.0)),
+                    ..default()
+                },
+                texture: image.clone(),
+                ..default()
+            })
+            .insert(ParticleSystem {
+                image,
+                update_bind_group: None,
+                render_bind_group: None,
+            });
+    }
 }
 
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
@@ -189,15 +223,28 @@ pub fn read_buffer(buffer: &Buffer, device: &RenderDevice, queue: &RenderQueue) 
 }
 
 fn queue_bind_group(
-    update_pipeline: Res<ParticleUpdatePipeline>,
+    mut update_pipeline: ResMut<ParticleUpdatePipeline>,
     render_pipeline: Res<ParticleRenderPipeline>,
     gpu_images: Res<RenderAssets<Image>>,
-    mut particle_systems: Query<&mut ParticleSystem>,
+    mut particle_systems: Query<(Entity, &mut ParticleSystem)>,
     render_device: Res<RenderDevice>,
 ) {
-    for mut system in &mut particle_systems {
+    for (entity, mut system) in &mut particle_systems {
         let view = &gpu_images[&system.image];
-
+        //This should be in prepare or somewhere else
+        if !update_pipeline.storage.contains_key(&entity) {
+            let particle = [Particle::default(); PARTICLE_COUNT as usize];
+            //ugh
+            let mut byte_buffer = Vec::new();
+            let mut buffer = encase::StorageBuffer::new(&mut byte_buffer);
+            buffer.write(&particle).unwrap();
+            let storage = render_device.create_buffer_with_data(&BufferInitDescriptor {
+                label: None,
+                usage: BufferUsages::COPY_DST | BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+                contents: buffer.into_inner(),
+            });
+            update_pipeline.storage.insert(entity, storage);
+        }
         //read_buffer(&pipeline.storage, &render_device, &render_queue);
         let update_group = render_device.create_bind_group(&BindGroupDescriptor {
             label: None,
@@ -205,7 +252,7 @@ fn queue_bind_group(
             entries: &[BindGroupEntry {
                 binding: 0,
                 resource: BindingResource::Buffer(
-                    update_pipeline.storage.as_entire_buffer_binding(),
+                    update_pipeline.storage[&entity].as_entire_buffer_binding(),
                 ),
             }],
         });
@@ -218,7 +265,7 @@ fn queue_bind_group(
                 BindGroupEntry {
                     binding: 0,
                     resource: BindingResource::Buffer(
-                        update_pipeline.storage.as_entire_buffer_binding(),
+                        update_pipeline.storage[&entity].as_entire_buffer_binding(),
                     ),
                 },
                 BindGroupEntry {
@@ -236,7 +283,8 @@ pub struct ParticleUpdatePipeline {
     bind_group_layout: BindGroupLayout,
     init_pipeline: CachedComputePipelineId,
     update_pipeline: CachedComputePipelineId,
-    storage: Buffer,
+    //FIXME clear when entity destroyed for find a way to store with components
+    storage: HashMap<Entity, Buffer>,
 }
 
 #[derive(Resource)]
@@ -277,24 +325,11 @@ impl FromWorld for ParticleUpdatePipeline {
             entry_point: Cow::from("update"),
         });
 
-        let particle = [Particle::default(); PARTICLE_COUNT as usize];
-        //ugh
-        let mut byte_buffer = Vec::new();
-        let mut buffer = encase::StorageBuffer::new(&mut byte_buffer);
-        buffer.write(&particle).unwrap();
-        let storage =
-            world
-                .resource::<RenderDevice>()
-                .create_buffer_with_data(&BufferInitDescriptor {
-                    label: None,
-                    usage: BufferUsages::COPY_DST | BufferUsages::STORAGE | BufferUsages::COPY_SRC,
-                    contents: buffer.into_inner(),
-                });
         ParticleUpdatePipeline {
             bind_group_layout: texture_bind_group_layout,
             init_pipeline,
             update_pipeline,
-            storage,
+            storage: HashMap::default(),
         }
     }
 }
