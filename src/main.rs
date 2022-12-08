@@ -51,6 +51,7 @@ fn main() {
 
 #[derive(Component, Default, Clone)]
 pub struct ParticleSystem {
+    image: Handle<Image>,
     update_bind_group: Option<ParticleUpdateBindGroup>,
     render_bind_group: Option<ParticleRenderBindGroup>,
     render_state: ParticleRenderState,
@@ -71,7 +72,7 @@ impl ExtractComponent for ParticleSystem {
 fn clear_texture(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    mut sprite: Query<&mut Handle<Image>, With<ParticleSystem>>,
+    mut sprite: Query<(&mut Handle<Image>, &mut ParticleSystem)>,
 ) {
     let mut image = Image::new_fill(
         Extent3d {
@@ -87,8 +88,9 @@ fn clear_texture(
         TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
     let image = images.add(image);
 
-    let mut sprite = sprite.single_mut();
+    let (mut sprite, mut system) = sprite.single_mut();
     *sprite = image.clone();
+    system.image = image.clone();
     //commands.insert_resource(ParticleImage(image));
 }
 
@@ -189,12 +191,12 @@ fn queue_bind_group(
     update_pipeline: Res<ParticleUpdatePipeline>,
     render_pipeline: Res<ParticleRenderPipeline>,
     gpu_images: Res<RenderAssets<Image>>,
-    mut particle_systems: Query<(&Handle<Image>, &mut ParticleSystem)>,
+    mut particle_systems: Query<(&mut ParticleSystem)>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
 ) {
-    for (particle_image, mut system) in &mut particle_systems {
-        let view = &gpu_images[&particle_image];
+    for (mut system) in &mut particle_systems {
+        let view = &gpu_images[&system.image];
 
         //read_buffer(&pipeline.storage, &render_device, &render_queue);
         let update_group = render_device.create_bind_group(&BindGroupDescriptor {
@@ -343,6 +345,7 @@ impl render_graph::Node for UpdateParticlesNode {
         for (entity, new_state) in updated_entities {
             systems.get_mut(world, entity).unwrap().update_state = new_state;
         }
+        self.particle_systems.update_archetypes(world);
     }
 
     fn run(
@@ -439,7 +442,7 @@ impl FromWorld for ParticleRenderPipeline {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 enum ParticleRenderState {
     #[default]
     Loading,
@@ -484,8 +487,10 @@ impl render_graph::Node for RenderParticlesNode {
         //Must do the updating after for ownership reasons I can't easily riddle out
         let mut systems = world.query::<&mut ParticleSystem>();
         for (entity, new_state) in updated_entities {
+            info!("{:?}", new_state);
             systems.get_mut(world, entity).unwrap().render_state = new_state;
         }
+        self.particle_systems.update_archetypes(world);
     }
 
     fn run(
