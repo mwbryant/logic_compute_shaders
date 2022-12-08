@@ -1,4 +1,5 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
+//TODO time
 
 use std::{borrow::Cow, ops::Deref};
 
@@ -18,7 +19,7 @@ use bevy_inspector_egui::WorldInspectorPlugin;
 pub const HEIGHT: f32 = 480.0;
 pub const WIDTH: f32 = 640.0;
 
-const PARTICLE_COUNT: u32 = 1024;
+const PARTICLE_COUNT: u32 = 1024 * 1000;
 // XXX when changing this also change it in the shader... TODO figure out how to avoid that...
 const WORKGROUP_SIZE: u32 = 16;
 
@@ -40,12 +41,15 @@ fn main() {
         }), //.disable::<LogPlugin>(),
     )
     .add_plugin(WorldInspectorPlugin::new())
-    .add_plugin(GameOfLifeComputePlugin)
+    .add_plugin(ParticlePlugin)
     .add_startup_system(setup)
     .add_system(clear_texture);
     //bevy_mod_debugdump::print_render_graph(&mut app);
     app.run();
 }
+
+#[derive(Component)]
+pub struct ParticleSystem {}
 
 //There is probably a much better way to clear a texture
 fn clear_texture(
@@ -100,9 +104,9 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.insert_resource(ParticleImage(image));
 }
 
-pub struct GameOfLifeComputePlugin;
+pub struct ParticlePlugin;
 
-impl Plugin for GameOfLifeComputePlugin {
+impl Plugin for ParticlePlugin {
     fn build(&self, app: &mut App) {
         // Extract the game of life image resource from the main world into the render world
         // for operation on by the compute shader and display on the sprite.
