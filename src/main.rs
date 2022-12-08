@@ -6,6 +6,7 @@ use std::{borrow::Cow, ops::Deref};
 use bevy::{
     prelude::*,
     render::{
+        extract_component::{ExtractComponent, ExtractComponentPlugin},
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_asset::RenderAssets,
         render_graph::{self, RenderGraph},
@@ -48,14 +49,29 @@ fn main() {
     app.run();
 }
 
-#[derive(Component)]
-pub struct ParticleSystem {}
+#[derive(Component, Default, Clone)]
+pub struct ParticleSystem {
+    update_bind_group: Option<ParticleUpdateBindGroup>,
+    render_bind_group: Option<ParticleRenderBindGroup>,
+    render_state: ParticleRenderState,
+    update_state: ParticleUpdateState,
+}
+
+impl ExtractComponent for ParticleSystem {
+    type Query = &'static ParticleSystem;
+    type Filter = ();
+
+    fn extract_component(item: bevy::ecs::query::QueryItem<'_, Self::Query>) -> Self {
+        // XXX this clone might be expensive, bindgroups are made with an arc, should always be in render world anyway
+        item.clone()
+    }
+}
 
 //There is probably a much better way to clear a texture
 fn clear_texture(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    mut sprite: Query<&mut Handle<Image>>,
+    mut sprite: Query<&mut Handle<Image>, With<ParticleSystem>>,
 ) {
     let mut image = Image::new_fill(
         Extent3d {
@@ -73,7 +89,7 @@ fn clear_texture(
 
     let mut sprite = sprite.single_mut();
     *sprite = image.clone();
-    commands.insert_resource(ParticleImage(image));
+    //commands.insert_resource(ParticleImage(image));
 }
 
 fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
@@ -91,35 +107,35 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
     let image = images.add(image);
 
-    commands.spawn(SpriteBundle {
-        sprite: Sprite {
-            custom_size: Some(Vec2::new(WIDTH * 3.0, HEIGHT * 3.0)),
+    commands
+        .spawn(SpriteBundle {
+            sprite: Sprite {
+                custom_size: Some(Vec2::new(WIDTH * 3.0, HEIGHT * 3.0)),
+                ..default()
+            },
+            texture: image,
             ..default()
-        },
-        texture: image.clone(),
-        ..default()
-    });
+        })
+        .insert(ParticleSystem::default());
     commands.spawn(Camera2dBundle::default());
-
-    commands.insert_resource(ParticleImage(image));
 }
 
 pub struct ParticlePlugin;
 
 impl Plugin for ParticlePlugin {
     fn build(&self, app: &mut App) {
-        // Extract the game of life image resource from the main world into the render world
-        // for operation on by the compute shader and display on the sprite.
-        app.add_plugin(ExtractResourcePlugin::<ParticleImage>::default());
+        app.add_plugin(ExtractComponentPlugin::<ParticleSystem>::default());
         let render_app = app.sub_app_mut(RenderApp);
         render_app
             .init_resource::<ParticleUpdatePipeline>()
             .init_resource::<ParticleRenderPipeline>()
             .add_system_to_stage(RenderStage::Queue, queue_bind_group);
 
+        let update_node = UpdateParticlesNode::new(&mut render_app.world);
+        let render_node = RenderParticlesNode::new(&mut render_app.world);
         let mut render_graph = render_app.world.resource_mut::<RenderGraph>();
-        render_graph.add_node("update_particles", UpdateParticlesNode::default());
-        render_graph.add_node("render_particles", RenderParticleNode::default());
+        render_graph.add_node("update_particles", update_node);
+        render_graph.add_node("render_particles", render_node);
 
         render_graph
             .add_node_edge("update_particles", "render_particles")
@@ -133,13 +149,13 @@ impl Plugin for ParticlePlugin {
     }
 }
 
-#[derive(Resource, Clone, Deref, ExtractResource)]
-struct ParticleImage(Handle<Image>);
+//#[derive(Resource, Clone, Deref, ExtractResource)]
+//struct ParticleImage(Handle<Image>);
 
-#[derive(Resource)]
+#[derive(Clone)]
 struct ParticleUpdateBindGroup(BindGroup);
 
-#[derive(Resource)]
+#[derive(Clone)]
 struct ParticleRenderBindGroup(BindGroup);
 
 // Helper function to print out gpu data for debugging
@@ -173,43 +189,47 @@ fn queue_bind_group(
     update_pipeline: Res<ParticleUpdatePipeline>,
     render_pipeline: Res<ParticleRenderPipeline>,
     gpu_images: Res<RenderAssets<Image>>,
-    particle_image: Res<ParticleImage>,
+    mut particle_systems: Query<(&Handle<Image>, &mut ParticleSystem)>,
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
 ) {
-    let view = &gpu_images[&particle_image.0];
+    for (particle_image, mut system) in &mut particle_systems {
+        let view = &gpu_images[&particle_image];
 
-    //read_buffer(&pipeline.storage, &render_device, &render_queue);
-    let update_group = render_device.create_bind_group(&BindGroupDescriptor {
-        label: None,
-        layout: &update_pipeline.bind_group_layout,
-        entries: &[BindGroupEntry {
-            binding: 0,
-            resource: BindingResource::Buffer(update_pipeline.storage.as_entire_buffer_binding()),
-        }],
-    });
-    commands.insert_resource(ParticleUpdateBindGroup(update_group));
-
-    let render_group = render_device.create_bind_group(&BindGroupDescriptor {
-        label: None,
-        layout: &render_pipeline.render_group_layout,
-        entries: &[
-            BindGroupEntry {
+        //read_buffer(&pipeline.storage, &render_device, &render_queue);
+        let update_group = render_device.create_bind_group(&BindGroupDescriptor {
+            label: None,
+            layout: &update_pipeline.bind_group_layout,
+            entries: &[BindGroupEntry {
                 binding: 0,
                 resource: BindingResource::Buffer(
                     update_pipeline.storage.as_entire_buffer_binding(),
                 ),
-            },
-            BindGroupEntry {
-                binding: 1,
-                resource: BindingResource::TextureView(&view.texture_view),
-            },
-        ],
-    });
-    commands.insert_resource(ParticleRenderBindGroup(render_group));
+            }],
+        });
+        system.update_bind_group = Some(ParticleUpdateBindGroup(update_group));
+
+        let render_group = render_device.create_bind_group(&BindGroupDescriptor {
+            label: None,
+            layout: &render_pipeline.render_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer(
+                        update_pipeline.storage.as_entire_buffer_binding(),
+                    ),
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::TextureView(&view.texture_view),
+                },
+            ],
+        });
+        system.render_bind_group = Some(ParticleRenderBindGroup(render_group));
+    }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct ParticleUpdatePipeline {
     bind_group_layout: BindGroupLayout,
     init_pipeline: CachedComputePipelineId,
@@ -269,46 +289,59 @@ impl FromWorld for ParticleUpdatePipeline {
     }
 }
 
+#[derive(Default, Clone)]
 enum ParticleUpdateState {
+    #[default]
     Loading,
     Init,
     Update,
 }
 
 struct UpdateParticlesNode {
-    state: ParticleUpdateState,
+    particle_systems: QueryState<&'static ParticleSystem>,
 }
 
-impl Default for UpdateParticlesNode {
-    fn default() -> Self {
+impl UpdateParticlesNode {
+    fn new(world: &mut World) -> Self {
         Self {
-            state: ParticleUpdateState::Loading,
+            particle_systems: QueryState::new(world),
         }
     }
 }
 
 impl render_graph::Node for UpdateParticlesNode {
     fn update(&mut self, world: &mut World) {
+        let mut systems = world.query::<(Entity, &ParticleSystem)>();
         let pipeline = world.resource::<ParticleUpdatePipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        // if the corresponding pipeline has loaded, transition to the next stage
-        match self.state {
-            ParticleUpdateState::Loading => {
-                if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.init_pipeline)
-                {
-                    self.state = ParticleUpdateState::Init;
+        //Track which ones change for ownership of world reasons
+        let mut updated_entities = Vec::default();
+
+        for (entity, system) in systems.iter(world) {
+            // if the corresponding pipeline has loaded, transition to the next stage
+            match system.update_state {
+                ParticleUpdateState::Loading => {
+                    if let CachedPipelineState::Ok(_) =
+                        pipeline_cache.get_compute_pipeline_state(pipeline.init_pipeline)
+                    {
+                        updated_entities.push((entity, ParticleUpdateState::Init));
+                    }
                 }
-            }
-            ParticleUpdateState::Init => {
-                if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.update_pipeline)
-                {
-                    self.state = ParticleUpdateState::Update;
+                ParticleUpdateState::Init => {
+                    if let CachedPipelineState::Ok(_) =
+                        pipeline_cache.get_compute_pipeline_state(pipeline.update_pipeline)
+                    {
+                        updated_entities.push((entity, ParticleUpdateState::Update));
+                    }
                 }
+                ParticleUpdateState::Update => {}
             }
-            ParticleUpdateState::Update => {}
+        }
+        //Must do the updating after for ownership reasons I can't easily riddle out
+        let mut systems = world.query::<&mut ParticleSystem>();
+        for (entity, new_state) in updated_entities {
+            systems.get_mut(world, entity).unwrap().update_state = new_state;
         }
     }
 
@@ -318,32 +351,34 @@ impl render_graph::Node for UpdateParticlesNode {
         render_context: &mut RenderContext,
         world: &World,
     ) -> Result<(), render_graph::NodeRunError> {
-        let bind_group = &world.resource::<ParticleUpdateBindGroup>().0;
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<ParticleUpdatePipeline>();
 
-        let mut pass = render_context
-            .command_encoder
-            .begin_compute_pass(&ComputePassDescriptor::default());
+        //Am I using iter manual correctly?
+        for system in self.particle_systems.iter_manual(world) {
+            let mut pass = render_context
+                .command_encoder
+                .begin_compute_pass(&ComputePassDescriptor::default());
 
-        pass.set_bind_group(0, bind_group, &[]);
+            pass.set_bind_group(0, &system.update_bind_group.as_ref().unwrap().0, &[]);
 
-        // select the pipeline based on the current state
-        match self.state {
-            ParticleUpdateState::Loading => {}
-            ParticleUpdateState::Init => {
-                let init_pipeline = pipeline_cache
-                    .get_compute_pipeline(pipeline.init_pipeline)
-                    .unwrap();
-                pass.set_pipeline(init_pipeline);
-                pass.dispatch_workgroups(PARTICLE_COUNT / WORKGROUP_SIZE, 1, 1);
-            }
-            ParticleUpdateState::Update => {
-                let update_pipeline = pipeline_cache
-                    .get_compute_pipeline(pipeline.update_pipeline)
-                    .unwrap();
-                pass.set_pipeline(update_pipeline);
-                pass.dispatch_workgroups(PARTICLE_COUNT / WORKGROUP_SIZE, 1, 1);
+            // select the pipeline based on the current state
+            match system.update_state {
+                ParticleUpdateState::Loading => {}
+                ParticleUpdateState::Init => {
+                    let init_pipeline = pipeline_cache
+                        .get_compute_pipeline(pipeline.init_pipeline)
+                        .unwrap();
+                    pass.set_pipeline(init_pipeline);
+                    pass.dispatch_workgroups(PARTICLE_COUNT / WORKGROUP_SIZE, 1, 1);
+                }
+                ParticleUpdateState::Update => {
+                    let update_pipeline = pipeline_cache
+                        .get_compute_pipeline(pipeline.update_pipeline)
+                        .unwrap();
+                    pass.set_pipeline(update_pipeline);
+                    pass.dispatch_workgroups(PARTICLE_COUNT / WORKGROUP_SIZE, 1, 1);
+                }
             }
         }
 
@@ -351,7 +386,7 @@ impl render_graph::Node for UpdateParticlesNode {
     }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct ParticleRenderPipeline {
     render_group_layout: BindGroupLayout,
     render_pipeline: CachedComputePipelineId,
@@ -404,38 +439,52 @@ impl FromWorld for ParticleRenderPipeline {
     }
 }
 
+#[derive(Default, Clone)]
 enum ParticleRenderState {
+    #[default]
     Loading,
     Render,
 }
 
-struct RenderParticleNode {
-    state: ParticleRenderState,
+struct RenderParticlesNode {
+    particle_systems: QueryState<&'static ParticleSystem>,
 }
 
-impl Default for RenderParticleNode {
-    fn default() -> Self {
+impl RenderParticlesNode {
+    fn new(world: &mut World) -> Self {
         Self {
-            state: ParticleRenderState::Loading,
+            particle_systems: QueryState::new(world),
         }
     }
 }
 
-impl render_graph::Node for RenderParticleNode {
+impl render_graph::Node for RenderParticlesNode {
     fn update(&mut self, world: &mut World) {
+        let mut systems = world.query::<(Entity, &ParticleSystem)>();
         let pipeline = world.resource::<ParticleRenderPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        // if the corresponding pipeline has loaded, transition to the next stage
-        match self.state {
-            ParticleRenderState::Loading => {
-                if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.render_pipeline)
-                {
-                    self.state = ParticleRenderState::Render;
+        //Track which ones change for ownership of world reasons
+        let mut updated_entities = Vec::default();
+
+        for (entity, system) in systems.iter(world) {
+            // if the corresponding pipeline has loaded, transition to the next stage
+            match system.render_state {
+                // if the corresponding pipeline has loaded, transition to the next stage
+                ParticleRenderState::Loading => {
+                    if let CachedPipelineState::Ok(_) =
+                        pipeline_cache.get_compute_pipeline_state(pipeline.render_pipeline)
+                    {
+                        updated_entities.push((entity, ParticleRenderState::Render));
+                    }
                 }
+                ParticleRenderState::Render => {}
             }
-            ParticleRenderState::Render => {}
+        }
+        //Must do the updating after for ownership reasons I can't easily riddle out
+        let mut systems = world.query::<&mut ParticleSystem>();
+        for (entity, new_state) in updated_entities {
+            systems.get_mut(world, entity).unwrap().render_state = new_state;
         }
     }
 
@@ -445,26 +494,27 @@ impl render_graph::Node for RenderParticleNode {
         render_context: &mut RenderContext,
         world: &World,
     ) -> Result<(), render_graph::NodeRunError> {
-        let bind_group = &world.resource::<ParticleRenderBindGroup>().0;
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<ParticleRenderPipeline>();
 
-        let mut pass = render_context
-            .command_encoder
-            .begin_compute_pass(&ComputePassDescriptor::default());
+        for system in self.particle_systems.iter_manual(world) {
+            let mut pass = render_context
+                .command_encoder
+                .begin_compute_pass(&ComputePassDescriptor::default());
 
-        pass.set_bind_group(0, bind_group, &[]);
+            pass.set_bind_group(0, &system.render_bind_group.as_ref().unwrap().0, &[]);
 
-        // select the pipeline based on the current state
-        match self.state {
-            ParticleRenderState::Loading => {}
-            ParticleRenderState::Render => {
-                let render_pipeline = pipeline_cache
-                    .get_compute_pipeline(pipeline.render_pipeline)
-                    .unwrap();
-                pass.set_pipeline(render_pipeline);
-                //FIXME
-                pass.dispatch_workgroups(PARTICLE_COUNT / WORKGROUP_SIZE, 1, 1);
+            // select the pipeline based on the current state
+            match system.render_state {
+                ParticleRenderState::Loading => {}
+                ParticleRenderState::Render => {
+                    let render_pipeline = pipeline_cache
+                        .get_compute_pipeline(pipeline.render_pipeline)
+                        .unwrap();
+                    pass.set_pipeline(render_pipeline);
+                    //FIXME
+                    pass.dispatch_workgroups(PARTICLE_COUNT / WORKGROUP_SIZE, 1, 1);
+                }
             }
         }
 
