@@ -7,7 +7,6 @@ use bevy::{
     prelude::*,
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin},
-        extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_asset::RenderAssets,
         render_graph::{self, RenderGraph},
         render_resource::*,
@@ -30,7 +29,6 @@ struct Particle {
 // XXX when changing this also change it in the shader... TODO figure out how to avoid that...
 const WORKGROUP_SIZE: u32 = 16;
 
-use bevy::log::LogPlugin;
 use wgpu::Maintain;
 
 fn main() {
@@ -74,7 +72,6 @@ impl ExtractComponent for ParticleSystem {
 
 //There is probably a much better way to clear a texture
 fn clear_texture(
-    mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     mut sprite: Query<(&mut Handle<Image>, &mut ParticleSystem)>,
 ) {
@@ -94,7 +91,8 @@ fn clear_texture(
 
     let (mut sprite, mut system) = sprite.single_mut();
     *sprite = image.clone();
-    system.image = image.clone();
+    // wish i wasn't double booking this
+    system.image = image;
     //commands.insert_resource(ParticleImage(image));
 }
 
@@ -191,15 +189,13 @@ pub fn read_buffer(buffer: &Buffer, device: &RenderDevice, queue: &RenderQueue) 
 }
 
 fn queue_bind_group(
-    mut commands: Commands,
     update_pipeline: Res<ParticleUpdatePipeline>,
     render_pipeline: Res<ParticleRenderPipeline>,
     gpu_images: Res<RenderAssets<Image>>,
-    mut particle_systems: Query<(&mut ParticleSystem)>,
+    mut particle_systems: Query<&mut ParticleSystem>,
     render_device: Res<RenderDevice>,
-    render_queue: Res<RenderQueue>,
 ) {
-    for (mut system) in &mut particle_systems {
+    for mut system in &mut particle_systems {
         let view = &gpu_images[&system.image];
 
         //read_buffer(&pipeline.storage, &render_device, &render_queue);
@@ -328,11 +324,11 @@ impl UpdateParticlesNode {
 
 impl render_graph::Node for UpdateParticlesNode {
     fn update(&mut self, world: &mut World) {
-        let mut systems = world.query::<(Entity, &ParticleSystem)>();
+        let mut systems = world.query_filtered::<Entity, With<ParticleSystem>>();
         let pipeline = world.resource::<ParticleUpdatePipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        for (entity, system) in systems.iter(world) {
+        for entity in systems.iter(world) {
             // if the corresponding pipeline has loaded, transition to the next stage
             let update_state = match self.update_state.get(&entity) {
                 Some(state) => state,
@@ -482,11 +478,11 @@ impl RenderParticlesNode {
 
 impl render_graph::Node for RenderParticlesNode {
     fn update(&mut self, world: &mut World) {
-        let mut systems = world.query::<(Entity, &ParticleSystem)>();
+        let mut systems = world.query_filtered::<Entity, With<ParticleSystem>>();
         let pipeline = world.resource::<ParticleRenderPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        for (entity, system) in systems.iter(world) {
+        for entity in systems.iter(world) {
             // if the corresponding pipeline has loaded, transition to the next stage
             let render_state = match self.render_state.get(&entity) {
                 Some(state) => state,

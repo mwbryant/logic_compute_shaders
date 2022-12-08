@@ -2100,7 +2100,6 @@ dependencies = [
  "bevy",
  "bevy-inspector-egui",
  "bevy_mod_debugdump",
- "bytemuck",
  "wgpu",
 ]
 
