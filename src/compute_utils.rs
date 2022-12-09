@@ -48,6 +48,29 @@ pub fn run_compute_pass(
     pass.dispatch_workgroups(PARTICLE_COUNT / WORKGROUP_SIZE, 1, 1);
 }
 
+//ugh lazy dupe
+pub fn run_compute_pass_2d(
+    render_context: &mut RenderContext,
+    bind_group: &BindGroup,
+    pipeline_cache: &PipelineCache,
+    pipeline: CachedComputePipelineId,
+) {
+    let mut pass = render_context
+        .command_encoder
+        .begin_compute_pass(&ComputePassDescriptor::default());
+
+    pass.set_bind_group(0, bind_group, &[]);
+
+    let pipeline = pipeline_cache.get_compute_pipeline(pipeline).unwrap();
+    pass.set_pipeline(pipeline);
+
+    pass.dispatch_workgroups(
+        PARTICLE_COUNT / WORKGROUP_SIZE,
+        PARTICLE_COUNT / WORKGROUP_SIZE,
+        1,
+    );
+}
+
 // Helper function to print out gpu data for debugging
 pub fn read_buffer(buffer: &Buffer, device: &RenderDevice, queue: &RenderQueue) {
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: None });

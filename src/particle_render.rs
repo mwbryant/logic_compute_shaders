@@ -1,5 +1,11 @@
 use std::{borrow::Cow, ops::Deref};
 
+use crate::compute_utils::{
+    compute_pipeline_descriptor, read_buffer, run_compute_pass, run_compute_pass_2d,
+};
+use crate::particle_system::ParticleSystemRender;
+use crate::particle_update::{ParticleUpdatePipeline, UpdateParticlesNode};
+use crate::{Particle, ParticleSystem, HEIGHT, PARTICLE_COUNT, WIDTH, WORKGROUP_SIZE};
 use bevy::{
     prelude::*,
     render::{
@@ -12,32 +18,26 @@ use bevy::{
     },
     utils::HashMap,
 };
-
-use crate::{
-    compute_utils::{compute_pipeline_descriptor, run_compute_pass},
-    particle_system::ParticleSystemRender,
-    ParticleSystem, PARTICLE_COUNT, WORKGROUP_SIZE,
-};
+use bevy_inspector_egui::WorldInspectorPlugin;
+use wgpu::Maintain;
 
 #[derive(Resource, Clone)]
-pub struct ParticleUpdatePipeline {
+pub struct ParticleRenderPipeline {
     pub bind_group_layout: BindGroupLayout,
-    init_pipeline: CachedComputePipelineId,
-    update_pipeline: CachedComputePipelineId,
+    clear_pipeline: CachedComputePipelineId,
+    render_pipeline: CachedComputePipelineId,
 }
 
-pub struct UpdateParticlesNode {
+pub struct RenderParticlesNode {
     particle_systems: QueryState<Entity, With<ParticleSystem>>,
-    //FIXME flush this when the entities no long exists, grows without bound if constantly creating and destroying spawners
-    update_state: HashMap<Entity, ParticleUpdateState>,
+    render_state: HashMap<Entity, ParticleRenderState>,
 }
 
-#[derive(Default, Clone)]
-enum ParticleUpdateState {
+#[derive(Default, Clone, Debug)]
+enum ParticleRenderState {
     #[default]
     Loading,
-    Init,
-    Update,
+    Render,
 }
 
 fn bind_group_layout() -> BindGroupLayoutDescriptor<'static> {
@@ -54,63 +54,58 @@ fn bind_group_layout() -> BindGroupLayoutDescriptor<'static> {
                 },
                 count: None,
             },
-            /*
             BindGroupLayoutEntry {
                 binding: 1,
                 visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                ty: BindingType::StorageTexture {
+                    access: StorageTextureAccess::ReadWrite,
+                    format: TextureFormat::Rgba8Unorm,
+                    view_dimension: TextureViewDimension::D2,
                 },
                 count: None,
             },
-            */
         ],
     }
 }
 
-impl FromWorld for ParticleUpdatePipeline {
+impl FromWorld for ParticleRenderPipeline {
     fn from_world(world: &mut World) -> Self {
         let bind_group_layout = world
             .resource::<RenderDevice>()
             .create_bind_group_layout(&bind_group_layout());
-
-        let shader = world.resource::<AssetServer>().load("particle_update.wgsl");
-
+        let shader = world.resource::<AssetServer>().load("particle_render.wgsl");
         let mut pipeline_cache = world.resource_mut::<PipelineCache>();
 
-        let init_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
+        let render_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
             shader.clone(),
-            "init",
+            "render",
             &bind_group_layout,
         ));
 
-        let update_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
+        let clear_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
             shader,
-            "update",
+            "clear",
             &bind_group_layout,
         ));
 
-        ParticleUpdatePipeline {
+        ParticleRenderPipeline {
             bind_group_layout,
-            init_pipeline,
-            update_pipeline,
+            clear_pipeline,
+            render_pipeline,
         }
     }
 }
 
-impl render_graph::Node for UpdateParticlesNode {
+impl render_graph::Node for RenderParticlesNode {
     fn update(&mut self, world: &mut World) {
         let mut systems = world.query_filtered::<Entity, With<ParticleSystem>>();
-        let pipeline = world.resource::<ParticleUpdatePipeline>();
+        let pipeline = world.resource::<ParticleRenderPipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
         for entity in systems.iter(world) {
-            // if the corresponding pipeline has loaded, transition to the next stage
             self.update_state(entity, pipeline_cache, pipeline);
         }
-        //Update the query for the run step
+
         self.particle_systems.update_archetypes(world);
     }
 
@@ -121,22 +116,27 @@ impl render_graph::Node for UpdateParticlesNode {
         world: &World,
     ) -> Result<(), render_graph::NodeRunError> {
         let pipeline_cache = world.resource::<PipelineCache>();
-        let pipeline = world.resource::<ParticleUpdatePipeline>();
+        let pipeline = world.resource::<ParticleRenderPipeline>();
         let particle_systems_render = world.resource::<ParticleSystemRender>();
 
-        //Am I using iter manual correctly?
         for entity in self.particle_systems.iter_manual(world) {
-            // select the pipeline based on the current state
-            if let Some(pipeline) = match self.update_state[&entity] {
-                ParticleUpdateState::Loading => None,
-                ParticleUpdateState::Init => Some(pipeline.init_pipeline),
-                ParticleUpdateState::Update => Some(pipeline.update_pipeline),
+            if let Some((clear_pipeline, render_pipeline)) = match self.render_state[&entity] {
+                ParticleRenderState::Loading => None,
+                ParticleRenderState::Render => {
+                    Some((pipeline.clear_pipeline, pipeline.render_pipeline))
+                }
             } {
+                run_compute_pass_2d(
+                    render_context,
+                    &particle_systems_render.render_bind_group[&entity],
+                    pipeline_cache,
+                    clear_pipeline,
+                );
                 run_compute_pass(
                     render_context,
-                    &particle_systems_render.update_bind_group[&entity],
+                    &particle_systems_render.render_bind_group[&entity],
                     pipeline_cache,
-                    pipeline,
+                    render_pipeline,
                 );
             }
         }
@@ -145,46 +145,37 @@ impl render_graph::Node for UpdateParticlesNode {
     }
 }
 
-impl UpdateParticlesNode {
+impl RenderParticlesNode {
     pub fn new(world: &mut World) -> Self {
         Self {
             particle_systems: QueryState::new(world),
-            update_state: HashMap::default(),
+            render_state: HashMap::default(),
         }
     }
-
     fn update_state(
         &mut self,
         entity: Entity,
         pipeline_cache: &PipelineCache,
-        pipeline: &ParticleUpdatePipeline,
+        pipeline: &ParticleRenderPipeline,
     ) {
-        let update_state = match self.update_state.get(&entity) {
+        let render_state = match self.render_state.get(&entity) {
             Some(state) => state,
             None => {
-                self.update_state
-                    .insert(entity, ParticleUpdateState::Loading);
-                &ParticleUpdateState::Loading
+                self.render_state
+                    .insert(entity, ParticleRenderState::Loading);
+                &ParticleRenderState::Loading
             }
         };
-
-        match update_state {
-            ParticleUpdateState::Loading => {
+        match render_state {
+            ParticleRenderState::Loading => {
                 if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.init_pipeline)
+                    pipeline_cache.get_compute_pipeline_state(pipeline.render_pipeline)
                 {
-                    self.update_state.insert(entity, ParticleUpdateState::Init);
+                    self.render_state
+                        .insert(entity, ParticleRenderState::Render);
                 }
             }
-            ParticleUpdateState::Init => {
-                if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.update_pipeline)
-                {
-                    self.update_state
-                        .insert(entity, ParticleUpdateState::Update);
-                }
-            }
-            ParticleUpdateState::Update => {}
+            ParticleRenderState::Render => {}
         }
     }
 }
