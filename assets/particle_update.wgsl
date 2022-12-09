@@ -1,9 +1,14 @@
 struct Particles {
     position: vec2<i32>,
 }
+struct Spawner {
+    time: f32,
+}
 
 @group(0) @binding(0)
 var<storage, read_write> particles: array<Particles>;
+//@group(0) @binding(1)
+//var<uniform> spawner: Spawner;
 
 fn hash(value: u32) -> u32 {
     var state = value;
