@@ -1,23 +1,7 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use std::{borrow::Cow, ops::Deref};
-
-use bevy::{
-    prelude::*,
-    render::{
-        extract_component::{ExtractComponent, ExtractComponentPlugin},
-        render_asset::RenderAssets,
-        render_graph::{self, RenderGraph},
-        render_resource::*,
-        renderer::{RenderContext, RenderDevice, RenderQueue},
-        RenderApp, RenderStage,
-    },
-    utils::HashMap,
-};
+use bevy::{prelude::*, render::render_resource::*};
 use bevy_inspector_egui::WorldInspectorPlugin;
-use compute_utils::read_buffer;
-use particle_update::{ParticleUpdatePipeline, UpdateParticlesNode};
-use wgpu::Maintain;
 
 pub const HEIGHT: f32 = 480.0;
 pub const WIDTH: f32 = 640.0;
@@ -36,7 +20,7 @@ mod particle_render;
 mod particle_system;
 mod particle_update;
 
-use particle_system::{ParticlePlugin, ParticleSystemRender};
+use particle_system::ParticlePlugin;
 
 fn main() {
     let mut app = App::new();

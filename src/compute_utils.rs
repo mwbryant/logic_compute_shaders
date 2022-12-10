@@ -3,18 +3,13 @@ use std::{borrow::Cow, ops::Deref};
 use bevy::{
     prelude::*,
     render::{
-        extract_component::{ExtractComponent, ExtractComponentPlugin},
-        render_asset::RenderAssets,
-        render_graph::{self, RenderGraph},
         render_resource::*,
         renderer::{RenderContext, RenderDevice, RenderQueue},
-        RenderApp, RenderStage,
     },
-    utils::HashMap,
 };
 use wgpu::Maintain;
 
-use crate::{Particle, ParticleSystem, PARTICLE_COUNT, WORKGROUP_SIZE};
+use crate::{Particle, PARTICLE_COUNT, WORKGROUP_SIZE};
 
 pub fn compute_pipeline_descriptor(
     shader: Handle<Shader>,

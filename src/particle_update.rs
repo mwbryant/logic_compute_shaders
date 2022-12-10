@@ -1,14 +1,9 @@
-use std::{borrow::Cow, ops::Deref};
-
 use bevy::{
     prelude::*,
     render::{
-        extract_component::{ExtractComponent, ExtractComponentPlugin},
-        render_asset::RenderAssets,
-        render_graph::{self, RenderGraph},
+        render_graph::{self},
         render_resource::*,
-        renderer::{RenderContext, RenderDevice, RenderQueue},
-        RenderApp, RenderStage,
+        renderer::{RenderContext, RenderDevice},
     },
     utils::HashMap,
 };
@@ -16,7 +11,7 @@ use bevy::{
 use crate::{
     compute_utils::{compute_pipeline_descriptor, run_compute_pass},
     particle_system::ParticleSystemRender,
-    ParticleSystem, PARTICLE_COUNT, WORKGROUP_SIZE,
+    ParticleSystem,
 };
 
 #[derive(Resource, Clone)]

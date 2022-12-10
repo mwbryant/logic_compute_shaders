@@ -1,6 +1,3 @@
-use std::{borrow::Cow, ops::Deref};
-
-use crate::compute_utils::read_buffer;
 use crate::particle_render::{render_bind_group, ParticleRenderPipeline, RenderParticlesNode};
 use crate::particle_update::{update_bind_group, ParticleUpdatePipeline, UpdateParticlesNode};
 use crate::{Particle, ParticleSystem, PARTICLE_COUNT};
@@ -9,15 +6,13 @@ use bevy::{
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin},
         render_asset::RenderAssets,
-        render_graph::{self, RenderGraph},
+        render_graph::RenderGraph,
         render_resource::*,
-        renderer::{RenderContext, RenderDevice, RenderQueue},
+        renderer::RenderDevice,
         RenderApp, RenderStage,
     },
     utils::HashMap,
 };
-use bevy_inspector_egui::WorldInspectorPlugin;
-use wgpu::Maintain;
 
 pub struct ParticlePlugin;
 
