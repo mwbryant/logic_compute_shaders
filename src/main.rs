@@ -76,7 +76,7 @@ fn create_texture(images: &mut Assets<Image>) -> Handle<Image> {
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
-        &[0, 0, 255, 127],
+        &[0, 0, 0, 0],
         TextureFormat::Rgba8Unorm,
     );
     image.texture_descriptor.usage =

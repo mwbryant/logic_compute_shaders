@@ -72,6 +72,7 @@ pub fn run_compute_pass_2d(
 }
 
 // Helper function to print out gpu data for debugging
+#[allow(dead_code)]
 pub fn read_buffer(buffer: &Buffer, device: &RenderDevice, queue: &RenderQueue) {
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
 

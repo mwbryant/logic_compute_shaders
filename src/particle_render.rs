@@ -6,6 +6,7 @@ use crate::compute_utils::{
 use crate::particle_system::ParticleSystemRender;
 use crate::particle_update::{ParticleUpdatePipeline, UpdateParticlesNode};
 use crate::{Particle, ParticleSystem, HEIGHT, PARTICLE_COUNT, WIDTH, WORKGROUP_SIZE};
+use bevy::render::texture::GpuImage;
 use bevy::{
     prelude::*,
     render::{
@@ -66,6 +67,31 @@ fn bind_group_layout() -> BindGroupLayoutDescriptor<'static> {
             },
         ],
     }
+}
+
+pub fn render_bind_group(
+    entity: Entity,
+    render_device: &RenderDevice,
+    render_pipeline: &ParticleRenderPipeline,
+    particle_system_render: &ParticleSystemRender,
+    view: &GpuImage,
+) -> BindGroup {
+    render_device.create_bind_group(&BindGroupDescriptor {
+        label: None,
+        layout: &render_pipeline.bind_group_layout,
+        entries: &[
+            BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer(
+                    particle_system_render.particle_buffers[&entity].as_entire_buffer_binding(),
+                ),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::TextureView(&view.texture_view),
+            },
+        ],
+    })
 }
 
 impl FromWorld for ParticleRenderPipeline {
