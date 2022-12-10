@@ -27,6 +27,7 @@ pub struct ParticleSystemRender {
 impl Plugin for ParticlePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugin(ExtractComponentPlugin::<ParticleSystem>::default());
+
         let render_app = app.sub_app_mut(RenderApp);
         render_app
             .init_resource::<ParticleUpdatePipeline>()
@@ -36,7 +37,9 @@ impl Plugin for ParticlePlugin {
 
         let update_node = UpdateParticlesNode::new(&mut render_app.world);
         let render_node = RenderParticlesNode::new(&mut render_app.world);
+
         let mut render_graph = render_app.world.resource_mut::<RenderGraph>();
+
         render_graph.add_node("update_particles", update_node);
         render_graph.add_node("render_particles", render_node);
 
