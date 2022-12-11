@@ -15,7 +15,7 @@ use bevy::{
 
 #[derive(Resource, Clone)]
 pub struct ParticleRenderPipeline {
-    pub bind_group_layout: BindGroupLayout,
+    bind_group_layout: BindGroupLayout,
     clear_pipeline: CachedComputePipelineId,
     render_pipeline: CachedComputePipelineId,
 }

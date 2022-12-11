@@ -57,7 +57,6 @@ fn init(@builtin(global_invocation_id) invocation_id: vec3<u32>, @builtin(num_wo
 
 @compute @workgroup_size(16, 1, 1)
 fn update(@builtin(global_invocation_id) invocation_id: vec3<u32>,@builtin(num_workgroups) num_workgroups: vec3<u32>) {
-    let location = vec2<i32>(i32(invocation_id.x), i32(invocation_id.y));
     let id = id(invocation_id, num_workgroups);
     particles[id] = Particles(
          vec2<i32>(particles[id].position.x, particles[id].position.y + 1)

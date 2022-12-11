@@ -115,7 +115,7 @@ fn queue_bind_group(
             .render_bind_group
             .contains_key(&entity)
         {
-            let view = &gpu_images[&system.image];
+            let view = &gpu_images[&system.rendered_texture];
             let render_group = render_bind_group(
                 entity,
                 &render_device,

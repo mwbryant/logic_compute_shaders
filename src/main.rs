@@ -48,7 +48,7 @@ fn main() {
 
 #[derive(Component, Default, Clone)]
 pub struct ParticleSystem {
-    pub image: Handle<Image>,
+    pub rendered_texture: Handle<Image>,
 }
 
 //There is probably a much better way to clear a texture
@@ -80,7 +80,9 @@ fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>, keyboard: Re
                 texture: image.clone(),
                 ..default()
             })
-            .insert(ParticleSystem { image });
+            .insert(ParticleSystem {
+                rendered_texture: image,
+            });
     }
 }
 
@@ -95,7 +97,9 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
             texture: image.clone(),
             ..default()
         })
-        .insert(ParticleSystem { image });
+        .insert(ParticleSystem {
+            rendered_texture: image,
+        });
 
     commands.spawn(Camera2dBundle::default());
 }

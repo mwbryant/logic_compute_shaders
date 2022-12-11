@@ -16,7 +16,7 @@ use crate::{
 
 #[derive(Resource, Clone)]
 pub struct ParticleUpdatePipeline {
-    pub bind_group_layout: BindGroupLayout,
+    bind_group_layout: BindGroupLayout,
     init_pipeline: CachedComputePipelineId,
     update_pipeline: CachedComputePipelineId,
 }
@@ -137,7 +137,6 @@ impl render_graph::Node for UpdateParticlesNode {
         let pipeline = world.resource::<ParticleUpdatePipeline>();
         let particle_systems_render = world.resource::<ParticleSystemRender>();
 
-        //Am I using iter manual correctly?
         for entity in self.particle_systems.iter_manual(world) {
             // select the pipeline based on the current state
             if let Some(pipeline) = match self.update_state[&entity] {
