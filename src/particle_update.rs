@@ -23,7 +23,6 @@ pub struct ParticleUpdatePipeline {
 
 pub struct UpdateParticlesNode {
     particle_systems: QueryState<Entity, With<ParticleSystem>>,
-    //FIXME flush this when the entities no long exists, grows without bound if constantly creating and destroying spawners
     update_state: HashMap<Entity, ParticleUpdateState>,
 }
 
@@ -38,30 +37,16 @@ enum ParticleUpdateState {
 fn update_bind_group_layout() -> BindGroupLayoutDescriptor<'static> {
     BindGroupLayoutDescriptor {
         label: None,
-        entries: &[
-            BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+        entries: &[BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            /*
-            BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            },
-            */
-        ],
+            count: None,
+        }],
     }
 }
 

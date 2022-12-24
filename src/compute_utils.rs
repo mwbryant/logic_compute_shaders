@@ -9,7 +9,7 @@ use bevy::{
 };
 use wgpu::Maintain;
 
-use crate::{Particle, PARTICLE_COUNT, WORKGROUP_SIZE};
+use crate::{Particle, HEIGHT, PARTICLE_COUNT, WIDTH, WORKGROUP_SIZE};
 
 pub fn compute_pipeline_descriptor(
     shader: Handle<Shader>,
@@ -60,8 +60,8 @@ pub fn run_compute_pass_2d(
     pass.set_pipeline(pipeline);
 
     pass.dispatch_workgroups(
-        PARTICLE_COUNT / WORKGROUP_SIZE,
-        PARTICLE_COUNT / WORKGROUP_SIZE,
+        WIDTH as u32 / WORKGROUP_SIZE,
+        HEIGHT as u32 / WORKGROUP_SIZE,
         1,
     );
 }
@@ -78,8 +78,10 @@ pub fn read_buffer(buffer: &Buffer, device: &RenderDevice, queue: &RenderQueue) 
         usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
         contents: scratch.as_ref(),
     });
+
     encoder.copy_buffer_to_buffer(buffer, 0, &dest, 0, buffer.size());
     queue.submit([encoder.finish()]);
+
     let slice = dest.slice(..);
     slice.map_async(wgpu::MapMode::Read, move |result| {
         let err = result.err();
@@ -87,8 +89,11 @@ pub fn read_buffer(buffer: &Buffer, device: &RenderDevice, queue: &RenderQueue) 
             panic!("{}", err.unwrap().to_string());
         }
     });
+
     device.poll(Maintain::Wait);
+
     let data = slice.get_mapped_range();
     let result = Vec::from(data.deref());
+
     println!("{:?}", result);
 }

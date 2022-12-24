@@ -1,6 +1,10 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-use bevy::{prelude::*, render::render_resource::*};
+use bevy::{
+    log::LogPlugin,
+    prelude::*,
+    render::{render_resource::*, texture::ImageSampler},
+};
 use bevy_inspector_egui::WorldInspectorPlugin;
 
 pub const HEIGHT: f32 = 480.0;
@@ -22,36 +26,30 @@ mod particle_update;
 
 use particle_system::ParticlePlugin;
 
-fn main() {
-    let mut app = App::new();
-    app.add_plugins(
-        DefaultPlugins.set(WindowPlugin {
-            window: WindowDescriptor {
-                width: WIDTH,
-                height: HEIGHT,
-                title: "Logic Particles".to_string(),
-                //present_mode: bevy::window::PresentMode::Immediate,
-                resizable: false,
-                ..default()
-            },
-            ..default()
-        }), //.disable::<LogPlugin>(),
-    )
-    .add_plugin(WorldInspectorPlugin::new())
-    .add_plugin(ParticlePlugin)
-    .add_startup_system(setup)
-    //.add_system(clear_texture)
-    .add_system(spawn);
-    //bevy_mod_debugdump::print_render_graph(&mut app);
-    app.run();
-}
-
 #[derive(Component, Default, Clone)]
 pub struct ParticleSystem {
     pub rendered_texture: Handle<Image>,
 }
 
-//There is probably a much better way to clear a texture
+fn main() {
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        window: WindowDescriptor {
+            width: WIDTH,
+            height: HEIGHT,
+            title: "Logic Particles".to_string(),
+            resizable: false,
+            ..default()
+        },
+        ..default()
+    }))
+    .add_plugin(WorldInspectorPlugin::new())
+    .add_plugin(ParticlePlugin)
+    .add_startup_system(setup)
+    .add_system(spawn_on_space_bar)
+    .run();
+}
+
 fn create_texture(images: &mut Assets<Image>) -> Handle<Image> {
     let mut image = Image::new_fill(
         Extent3d {
@@ -65,10 +63,15 @@ fn create_texture(images: &mut Assets<Image>) -> Handle<Image> {
     );
     image.texture_descriptor.usage =
         TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
+    image.sampler_descriptor = ImageSampler::nearest();
     images.add(image)
 }
 
-fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>, keyboard: Res<Input<KeyCode>>) {
+fn spawn_on_space_bar(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    keyboard: Res<Input<KeyCode>>,
+) {
     if keyboard.pressed(KeyCode::Space) {
         let image = create_texture(&mut images);
         commands

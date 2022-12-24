@@ -1,14 +1,9 @@
 struct Particles {
     position: vec2<i32>,
 }
-struct Spawner {
-    time: f32,
-}
 
 @group(0) @binding(0)
 var<storage, read_write> particles: array<Particles>;
-//@group(0) @binding(1)
-//var<uniform> spawner: Spawner;
 
 fn hash(value: u32) -> u32 {
     var state = value;
@@ -24,6 +19,7 @@ fn hash(value: u32) -> u32 {
 fn randomFloat(value: u32) -> f32 {
     return f32(hash(value)) / 4294967295.0;
 }
+
 fn hash2(value: u32) -> u32 {
     var state = value;
     state = state ^ 3104587013u;
