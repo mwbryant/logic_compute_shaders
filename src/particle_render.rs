@@ -67,10 +67,10 @@ pub fn render_bind_group(
     particle_system_render: &ParticleSystemRender,
     view: &GpuImage,
 ) -> BindGroup {
-    render_device.create_bind_group(&BindGroupDescriptor {
-        label: None,
-        layout: &render_pipeline.bind_group_layout,
-        entries: &[
+    render_device.create_bind_group(
+        None,
+        &render_pipeline.bind_group_layout,
+        &[
             BindGroupEntry {
                 binding: 0,
                 resource: BindingResource::Buffer(
@@ -82,7 +82,7 @@ pub fn render_bind_group(
                 resource: BindingResource::TextureView(&view.texture_view),
             },
         ],
-    })
+    )
 }
 
 impl FromWorld for ParticleRenderPipeline {
@@ -91,7 +91,7 @@ impl FromWorld for ParticleRenderPipeline {
             .resource::<RenderDevice>()
             .create_bind_group_layout(&bind_group_layout());
         let shader = world.resource::<AssetServer>().load("particle_render.wgsl");
-        let mut pipeline_cache = world.resource_mut::<PipelineCache>();
+        let pipeline_cache = world.resource_mut::<PipelineCache>();
 
         let render_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
             shader.clone(),

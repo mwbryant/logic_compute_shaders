@@ -56,16 +56,16 @@ pub fn update_bind_group(
     update_pipeline: &ParticleUpdatePipeline,
     particle_system_render: &ParticleSystemRender,
 ) -> BindGroup {
-    render_device.create_bind_group(&BindGroupDescriptor {
-        label: None,
-        layout: &update_pipeline.bind_group_layout,
-        entries: &[BindGroupEntry {
+    render_device.create_bind_group(
+        None,
+        &update_pipeline.bind_group_layout,
+        &[BindGroupEntry {
             binding: 0,
             resource: BindingResource::Buffer(
                 particle_system_render.particle_buffers[&entity].as_entire_buffer_binding(),
             ),
         }],
-    })
+    )
 }
 
 impl FromWorld for ParticleUpdatePipeline {
@@ -76,7 +76,7 @@ impl FromWorld for ParticleUpdatePipeline {
 
         let shader = world.resource::<AssetServer>().load("particle_update.wgsl");
 
-        let mut pipeline_cache = world.resource_mut::<PipelineCache>();
+        let pipeline_cache = world.resource_mut::<PipelineCache>();
 
         let init_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
             shader.clone(),

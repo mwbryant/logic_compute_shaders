@@ -10,7 +10,7 @@ opt-level = 1
 opt-level = 3
 
 [dependencies]
-bevy = {version = "0.9", features = ["dynamic", "wav"] }
-bevy-inspector-egui = "0.14.0"
-bevy_mod_debugdump = "0.6"
-wgpu = "0.14"
+bevy = { version = "0.12.1" }
+bevy-inspector-egui = "0.22.1"
+bevy_mod_debugdump = "0.9"
+wgpu = "0.17"
