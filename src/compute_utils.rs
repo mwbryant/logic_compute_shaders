@@ -18,10 +18,11 @@ pub fn compute_pipeline_descriptor(
 ) -> ComputePipelineDescriptor {
     ComputePipelineDescriptor {
         label: None,
-        layout: Some(vec![bind_group_layout.clone()]),
+        layout: vec![bind_group_layout.clone()],
         shader,
         shader_defs: vec![],
         entry_point: Cow::from(entry_point.to_owned()),
+        push_constant_ranges: vec![],
     }
 }
 
@@ -32,7 +33,7 @@ pub fn run_compute_pass(
     pipeline: CachedComputePipelineId,
 ) {
     let mut pass = render_context
-        .command_encoder
+        .command_encoder()
         .begin_compute_pass(&ComputePassDescriptor::default());
 
     pass.set_bind_group(0, bind_group, &[]);
@@ -51,7 +52,7 @@ pub fn run_compute_pass_2d(
     pipeline: CachedComputePipelineId,
 ) {
     let mut pass = render_context
-        .command_encoder
+        .command_encoder()
         .begin_compute_pass(&ComputePassDescriptor::default());
 
     pass.set_bind_group(0, bind_group, &[]);

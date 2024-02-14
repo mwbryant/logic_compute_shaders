@@ -24,17 +24,17 @@ fn clear(@builtin(global_invocation_id) invocation_id: vec3<u32>,@builtin(num_wo
 fn render(@builtin(global_invocation_id) invocation_id: vec3<u32>,@builtin(num_workgroups) num_workgroups: vec3<u32>) {
     let id = id(invocation_id, num_workgroups);
 
-    let location = particles[id].position;
+    var location = particles[id].position;
     textureStore(texture, location, vec4<f32>(1.0,0.0,0.0,1.0));
 
     //Bounds check!
-    let location = particles[id].position + vec2<i32>(0,1);
+    location = particles[id].position + vec2<i32>(0,1);
     textureStore(texture, location, vec4<f32>(0.0,0.0,1.0,1.0));
-    let location = particles[id].position + vec2<i32>(0,-1);
+    location = particles[id].position + vec2<i32>(0,-1);
     textureStore(texture, location, vec4<f32>(0.0,0.0,1.0,1.0));
 
-    let location = particles[id].position + vec2<i32>(1,0);
+    location = particles[id].position + vec2<i32>(1,0);
     textureStore(texture, location, vec4<f32>(1.0,0.0,1.0,1.0));
-    let location = particles[id].position + vec2<i32>(-1,0);
+    location = particles[id].position + vec2<i32>(-1,0);
     textureStore(texture, location, vec4<f32>(1.0,0.0,1.0,1.0));
 }

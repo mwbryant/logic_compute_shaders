@@ -1,6 +1,7 @@
 use crate::particle_render::{render_bind_group, ParticleRenderPipeline, RenderParticlesNode};
 use crate::particle_update::{update_bind_group, ParticleUpdatePipeline, UpdateParticlesNode};
 use crate::{Particle, ParticleSystem, PARTICLE_COUNT};
+use bevy::render::{Render, RenderSet};
 use bevy::{
     prelude::*,
     render::{
@@ -9,7 +10,7 @@ use bevy::{
         render_graph::RenderGraph,
         render_resource::*,
         renderer::RenderDevice,
-        RenderApp, RenderStage,
+        RenderApp,
     },
     utils::HashMap,
 };
@@ -26,14 +27,10 @@ pub struct ParticleSystemRender {
 
 impl Plugin for ParticlePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugin(ExtractComponentPlugin::<ParticleSystem>::default());
+        app.add_plugins(ExtractComponentPlugin::<ParticleSystem>::default());
 
         let render_app = app.sub_app_mut(RenderApp);
-        render_app
-            .init_resource::<ParticleUpdatePipeline>()
-            .init_resource::<ParticleSystemRender>()
-            .init_resource::<ParticleRenderPipeline>()
-            .add_system_to_stage(RenderStage::Queue, queue_bind_group);
+        render_app.add_systems(Render, queue_bind_group.in_set(RenderSet::Queue));
 
         let update_node = UpdateParticlesNode::new(&mut render_app.world);
         let render_node = RenderParticlesNode::new(&mut render_app.world);
@@ -43,15 +40,19 @@ impl Plugin for ParticlePlugin {
         render_graph.add_node("update_particles", update_node);
         render_graph.add_node("render_particles", render_node);
 
-        render_graph
-            .add_node_edge("update_particles", "render_particles")
-            .unwrap();
-        render_graph
-            .add_node_edge(
-                "render_particles",
-                bevy::render::main_graph::node::CAMERA_DRIVER,
-            )
-            .unwrap();
+        render_graph.add_node_edge("update_particles", "render_particles");
+        render_graph.add_node_edge(
+            "render_particles",
+            bevy::render::main_graph::node::CAMERA_DRIVER,
+        );
+    }
+
+    fn finish(&self, app: &mut App) {
+        let render_app = app.sub_app_mut(RenderApp);
+        render_app
+            .init_resource::<ParticleUpdatePipeline>()
+            .init_resource::<ParticleSystemRender>()
+            .init_resource::<ParticleRenderPipeline>();
     }
 }
 
@@ -115,7 +116,9 @@ fn queue_bind_group(
             .render_bind_group
             .contains_key(&entity)
         {
-            let view = &gpu_images[&system.rendered_texture];
+            let Some(view) = &gpu_images.get(&system.rendered_texture) else {
+                continue;
+            };
             let render_group = render_bind_group(
                 entity,
                 &render_device,
@@ -134,8 +137,9 @@ fn queue_bind_group(
 impl ExtractComponent for ParticleSystem {
     type Query = &'static ParticleSystem;
     type Filter = ();
+    type Out = Self;
 
-    fn extract_component(item: bevy::ecs::query::QueryItem<'_, Self::Query>) -> Self {
-        item.clone()
+    fn extract_component(item: bevy::ecs::query::QueryItem<'_, Self::Query>) -> Option<Self> {
+        Some(item.clone())
     }
 }

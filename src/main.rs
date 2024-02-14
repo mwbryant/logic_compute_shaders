@@ -1,11 +1,10 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 use bevy::{
-    log::LogPlugin,
     prelude::*,
     render::{render_resource::*, texture::ImageSampler},
+    window::WindowResolution,
 };
-use bevy_inspector_egui::WorldInspectorPlugin;
 
 pub const HEIGHT: f32 = 480.0;
 pub const WIDTH: f32 = 640.0;
@@ -24,6 +23,7 @@ mod particle_render;
 mod particle_system;
 mod particle_update;
 
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use particle_system::ParticlePlugin;
 
 #[derive(Component, Default, Clone)]
@@ -33,20 +33,22 @@ pub struct ParticleSystem {
 
 fn main() {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        window: WindowDescriptor {
-            width: WIDTH,
-            height: HEIGHT,
-            title: "Logic Particles".to_string(),
-            resizable: false,
+    app.add_plugins(
+        DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                resolution: WindowResolution::new(WIDTH, HEIGHT),
+                title: "Logic Particles".to_string(),
+                resizable: false,
+                ..default()
+            }),
             ..default()
-        },
-        ..default()
-    }))
-    .add_plugin(WorldInspectorPlugin::new())
-    .add_plugin(ParticlePlugin)
-    .add_startup_system(setup)
-    .add_system(spawn_on_space_bar)
+        }), //.disable::<bevy::log::LogPlugin>(),
+    )
+    .add_plugins(WorldInspectorPlugin::new())
+    .add_plugins(ParticlePlugin)
+    .add_systems(Startup, setup)
+    .add_systems(Update, spawn_on_space_bar)
+    // bevy_mod_debugdump::print_schedule_graph(&mut app, PostUpdate);
     .run();
 }
 
@@ -63,7 +65,7 @@ fn create_texture(images: &mut Assets<Image>) -> Handle<Image> {
     );
     image.texture_descriptor.usage =
         TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
-    image.sampler_descriptor = ImageSampler::nearest();
+    image.sampler = ImageSampler::nearest();
     images.add(image)
 }
 
