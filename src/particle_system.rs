@@ -1,7 +1,9 @@
 use crate::particle_render::{render_bind_group, ParticleRenderPipeline, RenderParticlesNode};
 use crate::particle_update::{update_bind_group, ParticleUpdatePipeline, UpdateParticlesNode};
 use crate::{Particle, ParticleSystem, PARTICLE_COUNT};
-use bevy::render::{Render, RenderSet};
+use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
+use bevy::render::render_graph::RenderLabel;
+use bevy::render::{graph, Render, RenderSet};
 use bevy::{
     prelude::*,
     render::{
@@ -16,6 +18,12 @@ use bevy::{
 };
 
 pub struct ParticlePlugin;
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct UpdateParticlesRenderLabel;
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+pub struct RenderParticlesRenderLabel;
 
 // Must maintain all our own data because render world flushes between frames :,(
 #[derive(Resource, Default)]
@@ -37,14 +45,11 @@ impl Plugin for ParticlePlugin {
 
         let mut render_graph = render_app.world.resource_mut::<RenderGraph>();
 
-        render_graph.add_node("update_particles", update_node);
-        render_graph.add_node("render_particles", render_node);
+        render_graph.add_node(UpdateParticlesRenderLabel, update_node);
+        render_graph.add_node(RenderParticlesRenderLabel, render_node);
 
-        render_graph.add_node_edge("update_particles", "render_particles");
-        render_graph.add_node_edge(
-            "render_particles",
-            bevy::render::main_graph::node::CAMERA_DRIVER,
-        );
+        render_graph.add_node_edge(UpdateParticlesRenderLabel, RenderParticlesRenderLabel);
+        render_graph.add_node_edge(RenderParticlesRenderLabel, graph::CameraDriverLabel);
     }
 
     fn finish(&self, app: &mut App) {
@@ -135,11 +140,11 @@ fn queue_bind_group(
 }
 
 impl ExtractComponent for ParticleSystem {
-    type Query = &'static ParticleSystem;
-    type Filter = ();
+    type QueryData = &'static ParticleSystem;
+    type QueryFilter = ();
     type Out = Self;
 
-    fn extract_component(item: bevy::ecs::query::QueryItem<'_, Self::Query>) -> Option<Self> {
+    fn extract_component(item: bevy::ecs::query::QueryItem<'_, Self::QueryData>) -> Option<Self> {
         Some(item.clone())
     }
 }

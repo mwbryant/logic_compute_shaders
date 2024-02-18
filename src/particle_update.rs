@@ -34,20 +34,17 @@ enum ParticleUpdateState {
     Update,
 }
 
-fn update_bind_group_layout() -> BindGroupLayoutDescriptor<'static> {
-    BindGroupLayoutDescriptor {
-        label: None,
-        entries: &[BindGroupLayoutEntry {
-            binding: 0,
-            visibility: ShaderStages::COMPUTE,
-            ty: BindingType::Buffer {
-                ty: BufferBindingType::Storage { read_only: false },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        }],
-    }
+fn update_bind_group_layout_entries() -> &'static [BindGroupLayoutEntry] {
+    &[BindGroupLayoutEntry {
+        binding: 0,
+        visibility: ShaderStages::COMPUTE,
+        ty: BindingType::Buffer {
+            ty: BufferBindingType::Storage { read_only: false },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }]
 }
 
 pub fn update_bind_group(
@@ -70,9 +67,10 @@ pub fn update_bind_group(
 
 impl FromWorld for ParticleUpdatePipeline {
     fn from_world(world: &mut World) -> Self {
-        let bind_group_layout = world
-            .resource::<RenderDevice>()
-            .create_bind_group_layout(&update_bind_group_layout());
+        let bind_group_layout = world.resource::<RenderDevice>().create_bind_group_layout(
+            "update_bind_group_layout",
+            &update_bind_group_layout_entries(),
+        );
 
         let shader = world.resource::<AssetServer>().load("particle_update.wgsl");
 

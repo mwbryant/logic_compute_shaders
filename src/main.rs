@@ -2,7 +2,7 @@
 
 use bevy::{
     prelude::*,
-    render::{render_resource::*, texture::ImageSampler},
+    render::{render_asset::RenderAssetUsages, render_resource::*, texture::ImageSampler},
     window::WindowResolution,
 };
 
@@ -44,7 +44,7 @@ fn main() {
             ..default()
         }), //.disable::<bevy::log::LogPlugin>(),
     )
-    .add_plugins(WorldInspectorPlugin::new())
+    // .add_plugins(WorldInspectorPlugin::new())
     .add_plugins(ParticlePlugin)
     .add_systems(Startup, setup)
     .add_systems(Update, spawn_on_space_bar)
@@ -62,6 +62,7 @@ fn create_texture(images: &mut Assets<Image>) -> Handle<Image> {
         TextureDimension::D2,
         &[0, 0, 0, 0],
         TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::default(),
     );
     image.texture_descriptor.usage =
         TextureUsages::COPY_DST | TextureUsages::STORAGE_BINDING | TextureUsages::TEXTURE_BINDING;
@@ -72,7 +73,7 @@ fn create_texture(images: &mut Assets<Image>) -> Handle<Image> {
 fn spawn_on_space_bar(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    keyboard: Res<Input<KeyCode>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
 ) {
     if keyboard.pressed(KeyCode::Space) {
         let image = create_texture(&mut images);

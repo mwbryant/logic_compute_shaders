@@ -32,32 +32,29 @@ enum ParticleRenderState {
     Render,
 }
 
-fn bind_group_layout() -> BindGroupLayoutDescriptor<'static> {
-    BindGroupLayoutDescriptor {
-        label: None,
-        entries: &[
-            BindGroupLayoutEntry {
-                binding: 0,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
-                    ty: BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
+fn bind_group_layout_entries() -> &'static [BindGroupLayoutEntry] {
+    &[
+        BindGroupLayoutEntry {
+            binding: 0,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
-            BindGroupLayoutEntry {
-                binding: 1,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::StorageTexture {
-                    access: StorageTextureAccess::ReadWrite,
-                    format: TextureFormat::Rgba8Unorm,
-                    view_dimension: TextureViewDimension::D2,
-                },
-                count: None,
+            count: None,
+        },
+        BindGroupLayoutEntry {
+            binding: 1,
+            visibility: ShaderStages::COMPUTE,
+            ty: BindingType::StorageTexture {
+                access: StorageTextureAccess::ReadWrite,
+                format: TextureFormat::Rgba8Unorm,
+                view_dimension: TextureViewDimension::D2,
             },
-        ],
-    }
+            count: None,
+        },
+    ]
 }
 
 pub fn render_bind_group(
@@ -89,7 +86,7 @@ impl FromWorld for ParticleRenderPipeline {
     fn from_world(world: &mut World) -> Self {
         let bind_group_layout = world
             .resource::<RenderDevice>()
-            .create_bind_group_layout(&bind_group_layout());
+            .create_bind_group_layout("render_bind_group_layout", &bind_group_layout_entries());
         let shader = world.resource::<AssetServer>().load("particle_render.wgsl");
         let pipeline_cache = world.resource_mut::<PipelineCache>();
 
