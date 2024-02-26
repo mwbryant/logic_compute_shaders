@@ -5,6 +5,7 @@ use bevy::{
     render::{render_asset::RenderAssetUsages, render_resource::*, texture::ImageSampler},
     window::WindowResolution,
 };
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
 pub const HEIGHT: f32 = 480.0;
 pub const WIDTH: f32 = 640.0;
@@ -23,7 +24,6 @@ mod particle_render;
 mod particle_system;
 mod particle_update;
 
-use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use particle_system::ParticlePlugin;
 
 #[derive(Component, Default, Clone)]
@@ -44,7 +44,7 @@ fn main() {
             ..default()
         }), //.disable::<bevy::log::LogPlugin>(),
     )
-    // .add_plugins(WorldInspectorPlugin::new())
+    .add_plugins(WorldInspectorPlugin::new())
     .add_plugins(ParticlePlugin)
     .add_systems(Startup, setup)
     .add_systems(Update, spawn_on_space_bar)

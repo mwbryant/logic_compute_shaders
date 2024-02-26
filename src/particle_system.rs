@@ -1,7 +1,6 @@
 use crate::particle_render::{render_bind_group, ParticleRenderPipeline, RenderParticlesNode};
 use crate::particle_update::{update_bind_group, ParticleUpdatePipeline, UpdateParticlesNode};
 use crate::{Particle, ParticleSystem, PARTICLE_COUNT};
-use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::render::render_graph::RenderLabel;
 use bevy::render::{graph, Render, RenderSet};
 use bevy::{
