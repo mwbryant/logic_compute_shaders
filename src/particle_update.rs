@@ -5,50 +5,38 @@ use bevy::{
         render_resource::*,
         renderer::{RenderContext, RenderDevice},
     },
-    utils::HashMap,
 };
 
 use crate::{
     compute_utils::{compute_pipeline_descriptor, run_compute_pass},
+    particle_config::ParticleConfig,
     particle_system::ParticleSystemRender,
-    ParticleSystem,
+    ParticleSystem, HEIGHT, WIDTH, WORKGROUP_SIZE,
 };
 
 #[derive(Resource, Clone)]
 pub struct ParticleUpdatePipeline {
     bind_group_layout: BindGroupLayout,
-    init_pipeline: CachedComputePipelineId,
-    update_pipeline: CachedComputePipelineId,
+    update_positions_pipeline: CachedComputePipelineId,
+    update_velocities_pipeline: CachedComputePipelineId,
+    update_spatial_hash_grid_pipeline: CachedComputePipelineId,
 }
 
 pub struct UpdateParticlesNode {
-    particle_systems: QueryState<Entity, With<ParticleSystem>>,
-    update_state: HashMap<Entity, ParticleUpdateState>,
+    particle_system: QueryState<Entity, With<ParticleSystem>>,
+    update_state: ParticleUpdateState,
 }
 
 #[derive(Default, Clone)]
 enum ParticleUpdateState {
     #[default]
     Loading,
-    Init,
-    Update,
+    UpdateVelocities,
+    UpdatePositions,
+    UpdateSpatialHashGrid,
 }
 
-fn update_bind_group_layout_entries() -> &'static [BindGroupLayoutEntry] {
-    &[BindGroupLayoutEntry {
-        binding: 0,
-        visibility: ShaderStages::COMPUTE,
-        ty: BindingType::Buffer {
-            ty: BufferBindingType::Storage { read_only: false },
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    }]
-}
-
-pub fn update_bind_group(
-    entity: Entity,
+pub fn create_update_bind_group(
     render_device: &RenderDevice,
     update_pipeline: &ParticleUpdatePipeline,
     particle_system_render: &ParticleSystemRender,
@@ -56,12 +44,68 @@ pub fn update_bind_group(
     render_device.create_bind_group(
         None,
         &update_pipeline.bind_group_layout,
-        &[BindGroupEntry {
-            binding: 0,
-            resource: BindingResource::Buffer(
-                particle_system_render.particle_buffers[&entity].as_entire_buffer_binding(),
-            ),
-        }],
+        &[
+            BindGroupEntry {
+                binding: 0,
+                resource: BindingResource::Buffer(
+                    particle_system_render
+                        .particle_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_buffer_binding(),
+                ),
+            },
+            BindGroupEntry {
+                binding: 1,
+                resource: BindingResource::Buffer(
+                    particle_system_render
+                        .particle_config_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_buffer_binding(),
+                ),
+            },
+            BindGroupEntry {
+                binding: 2,
+                resource: BindingResource::Buffer(
+                    particle_system_render
+                        .attraction_matrix_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_buffer_binding(),
+                ),
+            },
+            BindGroupEntry {
+                binding: 3,
+                resource: BindingResource::Buffer(
+                    particle_system_render
+                        .delta_time_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_buffer_binding(),
+                ),
+            },
+            BindGroupEntry {
+                binding: 4,
+                resource: BindingResource::Buffer(
+                    particle_system_render
+                        .spatial_indices_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_buffer_binding(),
+                ),
+            },
+            BindGroupEntry {
+                binding: 5,
+                resource: BindingResource::Buffer(
+                    particle_system_render
+                        .spatial_offsets_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_buffer_binding(),
+                ),
+            },
+        ],
     )
 }
 
@@ -69,29 +113,109 @@ impl FromWorld for ParticleUpdatePipeline {
     fn from_world(world: &mut World) -> Self {
         let bind_group_layout = world.resource::<RenderDevice>().create_bind_group_layout(
             "update_bind_group_layout",
-            &update_bind_group_layout_entries(),
+            &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform {},
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform {},
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
         );
 
         let shader = world.resource::<AssetServer>().load("particle_update.wgsl");
 
         let pipeline_cache = world.resource_mut::<PipelineCache>();
 
-        let init_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
-            shader.clone(),
-            "init",
-            &bind_group_layout,
-        ));
+        let shader_defs = vec![
+            ShaderDefVal::UInt("WIDTH".into(), (WIDTH as u32).into()),
+            ShaderDefVal::UInt("HEIGHT".into(), (HEIGHT as u32).into()),
+            ShaderDefVal::UInt("WORKGROUP_SIZE".into(), WORKGROUP_SIZE),
+        ];
 
-        let update_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
-            shader,
-            "update",
-            &bind_group_layout,
-        ));
+        let update_velocities_pipeline =
+            pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
+                shader.clone(),
+                "update_velocities",
+                &bind_group_layout,
+                shader_defs.clone(),
+            ));
+
+        let update_positions_pipeline =
+            pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
+                shader.clone(),
+                "update_positions",
+                &bind_group_layout,
+                shader_defs.clone(),
+            ));
+
+        let update_spatial_hash_grid_pipeline =
+            pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
+                shader,
+                "update_spatial_hash_grid",
+                &bind_group_layout,
+                shader_defs,
+            ));
 
         ParticleUpdatePipeline {
             bind_group_layout,
-            init_pipeline,
-            update_pipeline,
+            update_velocities_pipeline,
+            update_positions_pipeline,
+            update_spatial_hash_grid_pipeline,
         }
     }
 }
@@ -102,12 +226,12 @@ impl render_graph::Node for UpdateParticlesNode {
         let pipeline = world.resource::<ParticleUpdatePipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
 
-        for entity in systems.iter(world) {
+        if systems.get_single(world).is_ok() {
             // if the corresponding pipeline has loaded, transition to the next stage
-            self.update_state(entity, pipeline_cache, pipeline);
+            self.update_state(pipeline_cache, pipeline);
         }
-        //Update the query for the run step
-        self.particle_systems.update_archetypes(world);
+        // Update the query for the run step
+        self.particle_system.update_archetypes(world);
     }
 
     fn run(
@@ -118,20 +242,24 @@ impl render_graph::Node for UpdateParticlesNode {
     ) -> Result<(), render_graph::NodeRunError> {
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<ParticleUpdatePipeline>();
-        let particle_systems_render = world.resource::<ParticleSystemRender>();
+        let particle_system_render = world.resource::<ParticleSystemRender>();
+        let particle_config = world.resource::<ParticleConfig>();
 
-        for entity in self.particle_systems.iter_manual(world) {
-            // select the pipeline based on the current state
-            if let Some(pipeline) = match self.update_state[&entity] {
+        for _ in self.particle_system.iter_manual(world) {
+            if let Some(pipeline) = match self.update_state {
                 ParticleUpdateState::Loading => None,
-                ParticleUpdateState::Init => Some(pipeline.init_pipeline),
-                ParticleUpdateState::Update => Some(pipeline.update_pipeline),
+                ParticleUpdateState::UpdateVelocities => Some(pipeline.update_velocities_pipeline),
+                ParticleUpdateState::UpdatePositions => Some(pipeline.update_positions_pipeline),
+                ParticleUpdateState::UpdateSpatialHashGrid => {
+                    Some(pipeline.update_spatial_hash_grid_pipeline)
+                }
             } {
                 run_compute_pass(
                     render_context,
-                    &particle_systems_render.update_bind_group[&entity],
+                    &particle_system_render.update_bind_group.as_ref().unwrap(),
                     pipeline_cache,
                     pipeline,
+                    particle_config.n as u32,
                 );
             }
         }
@@ -143,43 +271,41 @@ impl render_graph::Node for UpdateParticlesNode {
 impl UpdateParticlesNode {
     pub fn new(world: &mut World) -> Self {
         Self {
-            particle_systems: QueryState::new(world),
-            update_state: HashMap::default(),
+            particle_system: QueryState::new(world),
+            update_state: ParticleUpdateState::default(),
         }
     }
 
-    fn update_state(
-        &mut self,
-        entity: Entity,
-        pipeline_cache: &PipelineCache,
-        pipeline: &ParticleUpdatePipeline,
-    ) {
-        let update_state = match self.update_state.get(&entity) {
-            Some(state) => state,
-            None => {
-                self.update_state
-                    .insert(entity, ParticleUpdateState::Loading);
-                &ParticleUpdateState::Loading
-            }
-        };
-
-        match update_state {
+    fn update_state(&mut self, pipeline_cache: &PipelineCache, pipeline: &ParticleUpdatePipeline) {
+        match self.update_state {
             ParticleUpdateState::Loading => {
-                if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.init_pipeline)
+                if let CachedPipelineState::Ok(_) = pipeline_cache
+                    .get_compute_pipeline_state(pipeline.update_spatial_hash_grid_pipeline)
                 {
-                    self.update_state.insert(entity, ParticleUpdateState::Init);
+                    self.update_state = ParticleUpdateState::UpdateSpatialHashGrid;
                 }
             }
-            ParticleUpdateState::Init => {
+            ParticleUpdateState::UpdateSpatialHashGrid => {
                 if let CachedPipelineState::Ok(_) =
-                    pipeline_cache.get_compute_pipeline_state(pipeline.update_pipeline)
+                    pipeline_cache.get_compute_pipeline_state(pipeline.update_velocities_pipeline)
                 {
-                    self.update_state
-                        .insert(entity, ParticleUpdateState::Update);
+                    self.update_state = ParticleUpdateState::UpdateVelocities;
                 }
             }
-            ParticleUpdateState::Update => {}
+            ParticleUpdateState::UpdateVelocities => {
+                if let CachedPipelineState::Ok(_) =
+                    pipeline_cache.get_compute_pipeline_state(pipeline.update_positions_pipeline)
+                {
+                    self.update_state = ParticleUpdateState::UpdatePositions;
+                }
+            }
+            ParticleUpdateState::UpdatePositions => {
+                if let CachedPipelineState::Ok(_) =
+                    pipeline_cache.get_compute_pipeline_state(pipeline.update_velocities_pipeline)
+                {
+                    self.update_state = ParticleUpdateState::UpdateVelocities;
+                }
+            }
         }
     }
 }

@@ -1,7 +1,8 @@
 use crate::compute_utils::{compute_pipeline_descriptor, run_compute_pass, run_compute_pass_2d};
+use crate::particle_config::ParticleConfig;
 use crate::particle_system::ParticleSystemRender;
 
-use crate::ParticleSystem;
+use crate::{ParticleSystem, WORKGROUP_SIZE};
 use bevy::render::texture::GpuImage;
 use bevy::{
     prelude::*,
@@ -10,7 +11,6 @@ use bevy::{
         render_resource::*,
         renderer::{RenderContext, RenderDevice},
     },
-    utils::HashMap,
 };
 
 #[derive(Resource, Clone)]
@@ -21,8 +21,8 @@ pub struct ParticleRenderPipeline {
 }
 
 pub struct RenderParticlesNode {
-    particle_systems: QueryState<Entity, With<ParticleSystem>>,
-    render_state: HashMap<Entity, ParticleRenderState>,
+    particle_system: QueryState<Entity, With<ParticleSystem>>,
+    render_state: ParticleRenderState,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -32,33 +32,7 @@ enum ParticleRenderState {
     Render,
 }
 
-fn bind_group_layout_entries() -> &'static [BindGroupLayoutEntry] {
-    &[
-        BindGroupLayoutEntry {
-            binding: 0,
-            visibility: ShaderStages::COMPUTE,
-            ty: BindingType::Buffer {
-                ty: BufferBindingType::Storage { read_only: false },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        },
-        BindGroupLayoutEntry {
-            binding: 1,
-            visibility: ShaderStages::COMPUTE,
-            ty: BindingType::StorageTexture {
-                access: StorageTextureAccess::ReadWrite,
-                format: TextureFormat::Rgba8Unorm,
-                view_dimension: TextureViewDimension::D2,
-            },
-            count: None,
-        },
-    ]
-}
-
-pub fn render_bind_group(
-    entity: Entity,
+pub fn create_render_bind_group(
     render_device: &RenderDevice,
     render_pipeline: &ParticleRenderPipeline,
     particle_system_render: &ParticleSystemRender,
@@ -71,11 +45,25 @@ pub fn render_bind_group(
             BindGroupEntry {
                 binding: 0,
                 resource: BindingResource::Buffer(
-                    particle_system_render.particle_buffers[&entity].as_entire_buffer_binding(),
+                    particle_system_render
+                        .particle_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_buffer_binding(),
                 ),
             },
             BindGroupEntry {
                 binding: 1,
+                resource: BindingResource::Buffer(
+                    particle_system_render
+                        .particle_config_buffer
+                        .as_ref()
+                        .unwrap()
+                        .as_entire_buffer_binding(),
+                ),
+            },
+            BindGroupEntry {
+                binding: 2,
                 resource: BindingResource::TextureView(&view.texture_view),
             },
         ],
@@ -84,22 +72,58 @@ pub fn render_bind_group(
 
 impl FromWorld for ParticleRenderPipeline {
     fn from_world(world: &mut World) -> Self {
-        let bind_group_layout = world
-            .resource::<RenderDevice>()
-            .create_bind_group_layout("render_bind_group_layout", &bind_group_layout_entries());
+        let bind_group_layout = world.resource::<RenderDevice>().create_bind_group_layout(
+            "render_bind_group_layout",
+            &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform {},
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::StorageTexture {
+                        access: StorageTextureAccess::ReadWrite,
+                        format: TextureFormat::Rgba8Unorm,
+                        view_dimension: TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        );
+
         let shader = world.resource::<AssetServer>().load("particle_render.wgsl");
         let pipeline_cache = world.resource_mut::<PipelineCache>();
+        let shader_defs = vec![ShaderDefVal::UInt("WORKGROUP_SIZE".into(), WORKGROUP_SIZE)];
 
         let render_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
             shader.clone(),
             "render",
             &bind_group_layout,
+            shader_defs.clone(),
         ));
 
         let clear_pipeline = pipeline_cache.queue_compute_pipeline(compute_pipeline_descriptor(
             shader,
             "clear",
             &bind_group_layout,
+            shader_defs,
         ));
 
         ParticleRenderPipeline {
@@ -120,7 +144,7 @@ impl render_graph::Node for RenderParticlesNode {
             self.update_state(entity, pipeline_cache, pipeline);
         }
 
-        self.particle_systems.update_archetypes(world);
+        self.particle_system.update_archetypes(world);
     }
 
     fn run(
@@ -132,9 +156,10 @@ impl render_graph::Node for RenderParticlesNode {
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<ParticleRenderPipeline>();
         let particle_systems_render = world.resource::<ParticleSystemRender>();
+        let particle_config = world.resource::<ParticleConfig>();
 
-        for entity in self.particle_systems.iter_manual(world) {
-            if let Some((clear_pipeline, render_pipeline)) = match self.render_state[&entity] {
+        for _ in self.particle_system.iter_manual(world) {
+            if let Some((clear_pipeline, render_pipeline)) = match self.render_state {
                 ParticleRenderState::Loading => None,
                 ParticleRenderState::Render => {
                     Some((pipeline.clear_pipeline, pipeline.render_pipeline))
@@ -142,15 +167,17 @@ impl render_graph::Node for RenderParticlesNode {
             } {
                 run_compute_pass_2d(
                     render_context,
-                    &particle_systems_render.render_bind_group[&entity],
+                    &particle_systems_render.render_bind_group.as_ref().unwrap(),
                     pipeline_cache,
                     clear_pipeline,
                 );
+
                 run_compute_pass(
                     render_context,
-                    &particle_systems_render.render_bind_group[&entity],
+                    &particle_systems_render.render_bind_group.as_ref().unwrap(),
                     pipeline_cache,
                     render_pipeline,
+                    particle_config.n as u32,
                 );
             }
         }
@@ -162,8 +189,8 @@ impl render_graph::Node for RenderParticlesNode {
 impl RenderParticlesNode {
     pub fn new(world: &mut World) -> Self {
         Self {
-            particle_systems: QueryState::new(world),
-            render_state: HashMap::default(),
+            particle_system: QueryState::new(world),
+            render_state: ParticleRenderState::default(),
         }
     }
     fn update_state(
@@ -172,23 +199,15 @@ impl RenderParticlesNode {
         pipeline_cache: &PipelineCache,
         pipeline: &ParticleRenderPipeline,
     ) {
-        let render_state = match self.render_state.get(&entity) {
-            Some(state) => state,
-            None => {
-                self.render_state
-                    .insert(entity, ParticleRenderState::Loading);
-                &ParticleRenderState::Loading
-            }
-        };
-        match render_state {
+        match self.render_state {
             ParticleRenderState::Loading => {
                 if let CachedPipelineState::Ok(_) =
                     pipeline_cache.get_compute_pipeline_state(pipeline.render_pipeline)
                 {
-                    self.render_state
-                        .insert(entity, ParticleRenderState::Render);
+                    self.render_state = ParticleRenderState::Render;
                 }
             }
+
             ParticleRenderState::Render => {}
         }
     }
