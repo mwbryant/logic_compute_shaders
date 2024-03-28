@@ -9,20 +9,39 @@ use bevy::{
 };
 use wgpu::Maintain;
 
-use crate::{Particle, HEIGHT, PARTICLE_COUNT, WIDTH, WORKGROUP_SIZE};
+use crate::{HEIGHT, WIDTH, WORKGROUP_SIZE};
 
 pub fn compute_pipeline_descriptor(
     shader: Handle<Shader>,
     entry_point: &str,
     bind_group_layout: &BindGroupLayout,
+    shader_defs: Vec<ShaderDefVal>,
 ) -> ComputePipelineDescriptor {
     ComputePipelineDescriptor {
         label: None,
-        layout: Some(vec![bind_group_layout.clone()]),
+        layout: vec![bind_group_layout.clone()],
         shader,
-        shader_defs: vec![],
+        shader_defs,
         entry_point: Cow::from(entry_point.to_owned()),
+        push_constant_ranges: vec![],
     }
+}
+
+pub fn compute_pass<'a>(
+    render_context: &'a mut RenderContext,
+    bind_group: &'a BindGroup,
+    pipeline_cache: &'a PipelineCache,
+    pipeline: CachedComputePipelineId,
+) -> wgpu::ComputePass<'a> {
+    let mut pass = render_context
+        .command_encoder()
+        .begin_compute_pass(&ComputePassDescriptor::default());
+
+    pass.set_bind_group(0, bind_group, &[]);
+
+    let pipeline = pipeline_cache.get_compute_pipeline(pipeline).unwrap();
+    pass.set_pipeline(pipeline);
+    pass
 }
 
 pub fn run_compute_pass(
@@ -30,34 +49,19 @@ pub fn run_compute_pass(
     bind_group: &BindGroup,
     pipeline_cache: &PipelineCache,
     pipeline: CachedComputePipelineId,
+    particle_count: u32,
 ) {
-    let mut pass = render_context
-        .command_encoder
-        .begin_compute_pass(&ComputePassDescriptor::default());
-
-    pass.set_bind_group(0, bind_group, &[]);
-
-    let pipeline = pipeline_cache.get_compute_pipeline(pipeline).unwrap();
-    pass.set_pipeline(pipeline);
-
-    pass.dispatch_workgroups(PARTICLE_COUNT / WORKGROUP_SIZE, 1, 1);
+    let mut pass = compute_pass(render_context, bind_group, pipeline_cache, pipeline);
+    pass.dispatch_workgroups(particle_count / WORKGROUP_SIZE, 1, 1);
 }
 
-//ugh lazy dupe
 pub fn run_compute_pass_2d(
     render_context: &mut RenderContext,
     bind_group: &BindGroup,
     pipeline_cache: &PipelineCache,
     pipeline: CachedComputePipelineId,
 ) {
-    let mut pass = render_context
-        .command_encoder
-        .begin_compute_pass(&ComputePassDescriptor::default());
-
-    pass.set_bind_group(0, bind_group, &[]);
-
-    let pipeline = pipeline_cache.get_compute_pipeline(pipeline).unwrap();
-    pass.set_pipeline(pipeline);
+    let mut pass = compute_pass(render_context, bind_group, pipeline_cache, pipeline);
 
     pass.dispatch_workgroups(
         WIDTH as u32 / WORKGROUP_SIZE,
@@ -71,8 +75,7 @@ pub fn run_compute_pass_2d(
 pub fn read_buffer(buffer: &Buffer, device: &RenderDevice, queue: &RenderQueue) {
     let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor { label: None });
 
-    //FIXME this could come from buffer.size
-    let scratch = [0; (Particle::SHADER_SIZE.get() * PARTICLE_COUNT as u64) as usize];
+    let scratch = vec![0; buffer.size() as usize];
     let dest = device.create_buffer_with_data(&BufferInitDescriptor {
         label: None,
         usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
